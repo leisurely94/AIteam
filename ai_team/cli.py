@@ -384,10 +384,11 @@ def cmd_status(args) -> int:
     _line("状态：%s　　目录：%s" % (run.status, run.dir))
     _line("团队：%s（%d 人）" % (run.team.name, len(run.team.members)))
     _line("\n任务：")
+    names = {member.id: member.name for member in run.team.members}
     for task in run.tasks:
         verdict = (task.review or {}).get("verdict", "-")
         _line("  [%-7s] %-4s %s　负责人：%s　评审：%s"
-              % (task.status, task.id, task.title, task.assignee, verdict))
+              % (task.status, task.id, task.title, names.get(task.assignee, task.assignee), verdict))
         if task.artifact:
             _line("           %s" % task.artifact)
     return 0

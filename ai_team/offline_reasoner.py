@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import datetime as _dt
 import re
 from typing import Dict, List, Optional, Sequence
 
@@ -68,6 +69,17 @@ def _pick_roles(goal: str) -> List[str]:
     # 去重且按固定顺序
     order = ["product_manager", "architect", "backend_dev", "frontend_dev", "data_analyst", "qa_engineer", "tech_writer", "reviewer"]
     return [r for r in order if r in roles]
+
+
+def _new_session(history: Optional[Sequence[Dict[str, str]]], gap_minutes: int = 30) -> bool:
+    """没有历史，或距上一轮超过 gap 分钟，视为新会话。"""
+    if not history:
+        return True
+    try:
+        last = _dt.datetime.strptime(str(history[-1].get("ts", "")), "%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return True
+    return (_dt.datetime.now() - last) > _dt.timedelta(minutes=gap_minutes)
 
 
 def _first_sentences(text: str, limit: int = 120) -> str:
@@ -510,7 +522,8 @@ class OfflineReasoner:
     ) -> str:
         lines: List[str] = []
 
-        if recall:
+        # 记忆只在新会话开场提示：同一会话靠 history 承接，避免每轮重复同一句
+        if recall and _new_session(history):
             lines.append("按你之前说的「%s」，这次我沿用这个口径。" % _first_sentences(recall[0], 40))
 
         lines.append("你说的「%s」，我从%s的角度看是这样的。" % (_first_sentences(text, 30), human.title))
@@ -521,8 +534,18 @@ class OfflineReasoner:
             "这个目标的优先级你怎么排？",
         ))
         lines.extend(stance[:2])
+        # 离线模式下按轮次轮换一句补充，避免每轮回复一模一样
+        turn = len(history or []) // 2
+        lines.append(self.ALT[turn % len(self.ALT)])
         lines.append(stance[2])
         return "\n".join(lines)
+
+    ALT = (
+        "再往下一层：这件事最贵的失败成本在哪，我先按那个兜底。",
+        "补一个前提：口径/接口没定之前，我不下最终结论。",
+        "先做能验证的那部分，跑通了再扩范围，别一上来铺满。",
+        "如果你给我具体数据或样例，我可以把判断再收窄一层。",
+    )
 
     # ---------- 评审 ----------
 

@@ -59,6 +59,8 @@ class ConversationTest(unittest.TestCase):
 
     def test_new_session_recalls_previous_constraint(self):
         self._chat("qa_engineer").reply("记住：周报按周一到周五统计")
+        # 新会话：长期记忆保留，短期会话历史不延续
+        self.memory.clear_history("qa_engineer")
         fresh = DigitalHumanChat(
             create_human("qa_engineer"), self.reasoner, self.reasoner, MemoryStore(self.tmp), self.brief
         )
