@@ -3,10 +3,11 @@
 优先级：命令行参数 > 环境变量 > 内置默认值。
 
 环境变量：
-    AITEAM_PROVIDER    mock | ark | openai
+    AITEAM_PROVIDER    mock | ark | openai | hub
     AITEAM_MODEL       模型名
     AITEAM_BASE_URL    OpenAI 兼容网关地址
-    AITEAM_API_KEY     密钥（ark 亦可读 ARK_API_KEY/DOUBAO_API_KEY）
+    AITEAM_WIRE_API    chat | responses（默认 chat；model hub 用 responses）
+    AITEAM_API_KEY     密钥（ark 亦可读 ARK_API_KEY/DOUBAO_API_KEY；hub 亦可读 MODEL_HUB_API_KEY）
     AITEAM_DATA_DIR    运行数据目录，默认 .ai_team
     AITEAM_MAX_REWORK  评审返工轮数上限，默认 1
     AITEAM_TIMEOUT     单次模型调用超时秒数，默认 120
@@ -20,17 +21,25 @@ PROVIDER_DEFAULTS = {
     "ark": {
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
         "model": "doubao-seed-1-6-250615",
+        "wire_api": "chat",
     },
     "openai": {
         "base_url": "https://api.openai.com/v1",
         "model": "gpt-4o-mini",
+        "wire_api": "chat",
     },
-    "mock": {"base_url": "", "model": ""},
+    "hub": {
+        "base_url": "https://dataagent-dev-llm.bytedance.net/v1",
+        "model": "gpt-5.6-terra",
+        "wire_api": "responses",
+    },
+    "mock": {"base_url": "", "model": "", "wire_api": "chat"},
 }
 
 API_KEY_ENV = {
     "ark": ("AITEAM_API_KEY", "ARK_API_KEY", "DOUBAO_API_KEY"),
     "openai": ("AITEAM_API_KEY", "OPENAI_API_KEY"),
+    "hub": ("AITEAM_API_KEY", "MODEL_HUB_API_KEY", "OPENAPI_SK"),
     "mock": (),
 }
 
@@ -44,6 +53,7 @@ class Settings:
     provider: str = "mock"
     model: str = ""
     base_url: str = ""
+    wire_api: str = "chat"
     api_key: str = ""
     max_rework: int = 1
     data_dir: str = ".ai_team"
@@ -69,6 +79,8 @@ class Settings:
             self.model = PROVIDER_DEFAULTS[self.provider]["model"]
         if not self.base_url:
             self.base_url = PROVIDER_DEFAULTS[self.provider]["base_url"]
+        if self.wire_api not in ("chat", "responses"):
+            raise ConfigError("wire_api 只能是 chat 或 responses，当前为 %s" % self.wire_api)
         return self
 
 
@@ -92,6 +104,7 @@ def load_settings(
         provider=provider,
         model=model or os.environ.get("AITEAM_MODEL", "").strip(),
         base_url=os.environ.get("AITEAM_BASE_URL", "").strip(),
+        wire_api=os.environ.get("AITEAM_WIRE_API", "").strip(),
         api_key=_first_env(*API_KEY_ENV.get(provider, ("AITEAM_API_KEY",))),
         data_dir=data_dir or os.environ.get("AITEAM_DATA_DIR", "").strip() or ".ai_team",
         timeout=int(os.environ.get("AITEAM_TIMEOUT", "120") or 120),
@@ -101,4 +114,6 @@ def load_settings(
     else:
         raw = os.environ.get("AITEAM_MAX_REWORK", "").strip()
         settings = replace(settings, max_rework=int(raw) if raw.isdigit() else 1)
+    if not settings.wire_api:
+        settings.wire_api = PROVIDER_DEFAULTS[provider]["wire_api"]
     return settings.check()

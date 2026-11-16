@@ -173,19 +173,32 @@ GITHUB_TOKEN=ghp_xxx ./scripts/push_github.sh ai-team public
 
 
 ```
-export AITEAM_PROVIDER=ark              # ark | openai | mock
-export AITEAM_API_KEY=...               # ark 也可用 ARK_API_KEY
+export AITEAM_PROVIDER=ark              # ark | openai | hub | mock
+export AITEAM_API_KEY=...               # ark 也可用 ARK_API_KEY；hub 也可用 MODEL_HUB_API_KEY
 export AITEAM_MODEL=doubao-seed-1-6-250615
 export AITEAM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3   # 可选，默认已填
 ```
 
-任何 OpenAI 兼容网关同理，改 `AITEAM_BASE_URL` 与模型名即可。其他可调项：
+两种接口形态都支持，用 `AITEAM_WIRE_API` 切换：
+
+- `chat`（默认）：`POST {base_url}/chat/completions`，适配方舟、OpenAI 及大多数兼容网关
+- `responses`：`POST {base_url}/responses`，适配 Model Hub / OpenAI Responses 风格网关
+
+```bash
+# 内网 Model Hub 示例
+export AITEAM_PROVIDER=hub            # 默认 base_url + gpt-5.6-terra + responses
+export AITEAM_API_KEY=<网关签发的 token>
+python3 -m ai_team talk 沈砚秋
+```
+
+其他可调项：
 
 
 
 | 环境变量                | 默认         | 说明          |
 | ------------------- | ---------- | ----------- |
 | `AITEAM_DATA_DIR`   | `.ai_team` | 运行数据目录      |
+| `AITEAM_WIRE_API`   | 按 provider | `chat` 或 `responses` |
 | `AITEAM_MAX_REWORK` | `1`        | 评审返工轮数上限    |
 | `AITEAM_TIMEOUT`    | `120`      | 单次模型调用超时（秒） |
 

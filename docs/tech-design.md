@@ -205,6 +205,17 @@ export AITEAM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3   # 可选
 
 `openai` 兼容网关同理，只需改 `AITEAM_BASE_URL` 与模型名。请求走 `/v1/chat/completions`，`urllib` 直连，超时与重试在 `ChatClient` 内收敛。
 
+### 7.3 两种 wire_api
+
+部分网关（如内网 Model Hub）只暴露 OpenAI 的 Responses 协议，用 `AITEAM_WIRE_API` 切换：
+
+| 取值 | 请求 | 请求体 | 响应解析 |
+| --- | --- | --- | --- |
+| `chat`（默认） | `POST {base_url}/chat/completions` | `messages[]` + `max_tokens` | `choices[0].message.content` |
+| `responses` | `POST {base_url}/responses` | `input[]` + `max_output_tokens` | `output_text` 或 `output[].content[].output_text` |
+
+`hub` provider 预置 `base_url=https://dataagent-dev-llm.bytedance.net/v1`、`model=gpt-5.6-terra`、`wire_api=responses`，密钥读 `AITEAM_API_KEY` / `MODEL_HUB_API_KEY` / `OPENAPI_SK`。解析逻辑对两种结构都做了兜底：只要响应里存在 `output_text`、`output[]` 的文本块、或 `choices[]`，都能取到正文；三者皆空才抛 `LLMError`。
+
 ## 8. 错误处理与可观测
 
 | 场景 | 行为 |
