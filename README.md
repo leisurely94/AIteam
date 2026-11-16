@@ -175,7 +175,7 @@ GITHUB_TOKEN=ghp_xxx ./scripts/push_github.sh ai-team public
 ```
 export AITEAM_PROVIDER=ark              # ark | openai | hub | mock
 export AITEAM_API_KEY=...               # ark 也可用 ARK_API_KEY；hub 也可用 MODEL_HUB_API_KEY
-export AITEAM_MODEL=doubao-seed-1-6-250615
+export AITEAM_MODEL=doubao-seed-2-1-lite-260915
 export AITEAM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3   # 可选，默认已填
 ```
 

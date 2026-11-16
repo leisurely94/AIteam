@@ -199,7 +199,7 @@ sequenceDiagram
 ```bash
 export AITEAM_PROVIDER=ark
 export AITEAM_API_KEY=...                      # 或 ARK_API_KEY
-export AITEAM_MODEL=doubao-seed-1-6-250615     # 按账号可用模型填写
+export AITEAM_MODEL=doubao-seed-2-1-lite-260915     # 按账号可用模型填写
 export AITEAM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3   # 可选
 ```
 

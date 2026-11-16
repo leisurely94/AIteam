@@ -20,7 +20,7 @@ from dataclasses import dataclass, replace
 PROVIDER_DEFAULTS = {
     "ark": {
         "base_url": "https://ark.cn-beijing.volces.com/api/v3",
-        "model": "doubao-seed-1-6-250615",
+        "model": "doubao-seed-2-1-lite-260915",
         "wire_api": "chat",
     },
     "openai": {
