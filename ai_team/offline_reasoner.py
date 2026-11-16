@@ -455,6 +455,75 @@ class OfflineReasoner:
             body.append("## %s\n\n%s\n" % (section, _bullets(brief.acceptance[:3])))
         return "\n".join(body)
 
+    # ---------- 对话 ----------
+
+    STANCE = {
+        "product_manager": (
+            "我先把它收成一句可验收的话：这次做到什么程度算完成。",
+            "范围之外的需求先记下来单独排期，不要在主线里塞。",
+            "你更在意先出可用版本，还是一次做到完整？",
+        ),
+        "architect": (
+            "结构上我会先定边界和接口，再谈实现。",
+            "能单机跑通就别提前上中间件，复杂度要花在真正会变的地方。",
+            "这个功能要接的外部系统有哪些？",
+        ),
+        "backend_dev": (
+            "实现上先定接口契约和数据模型，异常路径一起想清楚。",
+            "我会把幂等和失败重试做在入口，下游就不用重复处理。",
+            "数据量级和调用频率大概是多少？",
+        ),
+        "frontend_dev": (
+            "交互上主操作只留一个，其余都收进二级入口。",
+            "空态、加载态、失败态我会一起设计，不然上线就露馅。",
+            "这个页面主要在手机上看还是电脑上看？",
+        ),
+        "data_analyst": (
+            "先定口径：分子分母、时间范围、去重规则写清楚，结论才有意义。",
+            "数据源要标清楚，取数和计算逻辑得能被别人复核。",
+            "这个指标按天还是按周统计？",
+        ),
+        "qa_engineer": (
+            "我先问怎么证明它达标：正常流、异常流、边界值各要覆盖。",
+            "用例得写成可执行步骤加明确预期，模糊描述没法判通过。",
+            "这次回归的范围包括哪些历史功能？",
+        ),
+        "tech_writer": (
+            "先确认读者是谁、前置条件是什么，文档才不会写偏。",
+            "步骤用动词开头，能照着做完比写得漂亮重要。",
+            "这份文档是给内部同学还是外部用户看？",
+        ),
+        "reviewer": (
+            "我只对照验收标准看，不看产出者的自我评价。",
+            "有争议的点我会标出来，但不替你重写。",
+            "这次的验收标准里，哪一条是你最没把握的？",
+        ),
+    }
+
+    def converse(
+        self,
+        human: DigitalHuman,
+        text: str,
+        history: Optional[Sequence[Dict[str, str]]] = None,
+        recall: Optional[Sequence[str]] = None,
+        brief: Optional[ProjectBrief] = None,
+    ) -> str:
+        lines: List[str] = []
+
+        if recall:
+            lines.append("按你之前说的「%s」，这次我沿用这个口径。" % _first_sentences(recall[0], 40))
+
+        lines.append("你说的「%s」，我从%s的角度看是这样的。" % (_first_sentences(text, 30), human.title))
+
+        stance = self.STANCE.get(human.role, (
+            "先按目标把范围收住，再逐条落到可验证的结论。",
+            "不确定的地方我会标明假设，不猜着往下写。",
+            "这个目标的优先级你怎么排？",
+        ))
+        lines.extend(stance[:2])
+        lines.append(stance[2])
+        return "\n".join(lines)
+
     # ---------- 评审 ----------
 
     def review(self, reviewer: DigitalHuman, task: Task, artifact: str, brief: ProjectBrief) -> ReviewResult:

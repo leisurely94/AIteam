@@ -10,6 +10,7 @@ import datetime as _dt
 import hashlib
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -41,6 +42,22 @@ class RunWorkspace:
     def ensure(self) -> "RunWorkspace":
         self.artifacts_dir.mkdir(parents=True, exist_ok=True)
         return self
+
+    def copy_avatars(self, members) -> None:
+        """把数字人形象复制进运行目录，保证产物目录自包含、可离线渲染。"""
+        from .personas import AVATAR_DIR
+
+        dest = self.root / "assets" / "avatars"
+        for member in members:
+            if not getattr(member, "avatar", ""):
+                continue
+            src = AVATAR_DIR / Path(member.avatar).name
+            if not src.exists():
+                continue
+            dest.mkdir(parents=True, exist_ok=True)
+            target = dest / src.name
+            if not target.exists():
+                shutil.copy2(src, target)
 
     # ---------- 路径 ----------
 

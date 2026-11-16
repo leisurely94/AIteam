@@ -1,12 +1,19 @@
 # AI Team 技术方案
 
-> 版本：v0.1　对应 PRD：v0.1　最后更新：2026-11-16
+> 版本：v0.2　对应 PRD：v0.2　最后更新：2026-11-16
+
+## 变更记录
+
+| 版本 | 变更 |
+| --- | --- |
+| v0.1 | 五阶段编排、任务图、评审闭环、状态双写 |
+| v0.2 | 增加数字人对话引擎、跨运行记忆库、形象资源与名片渲染 |
 
 ## 1. 总体架构
 
 ```mermaid
 flowchart TD
-    U[用户] -->|目标| E[主入口 CLI / chat]
+    U[用户] -->|目标 / 点名对话| E[主入口 CLI / chat]
     E --> C[澄清 Clarifier]
     C --> B[需求基线 Brief]
     B --> R[组队 Roster]
@@ -23,17 +30,23 @@ flowchart TD
     O --> F[汇总 Report]
     O --> S[(SQLite 状态库)]
     O --> L[事件日志]
+    E -->|多轮会话| CV[对话引擎]
+    CV -->|人设+召回| H1
+    CV -->|人设+召回| H2
+    CV --> M[(记忆库 JSON)]
 ```
 
 分层：
 
 | 层 | 模块 | 职责 |
 | --- | --- | --- |
-| 入口层 | `cli` | 解析命令、交互澄清、展示进度、导出 |
+| 入口层 | `cli` | 解析命令、交互澄清、点名对话、展示进度、导出 |
 | 编排层 | `orchestrator` | 阶段推进、任务调度、评审闭环、失败处理 |
-| 协作层 | `tasks` / `store` / `workspace` | 任务图校验、状态持久化、产物落盘 |
-| 角色层 | `personas` / `models` | 角色模板、数字人实例、团队 |
-| 推理层 | `reasoner` / `offline_reasoner` / `factory` | 基线、组队、计划、执行、评审、汇总 |
+| 对话层 | `conversation` | 人设提示重建、多轮上下文、记忆召回与写入 |
+| 协作层 | `tasks` / `store` / `workspace` | 任务图校验、状态持久化、产物与形象资源落盘 |
+| 角色层 | `personas` / `models` / `assets` | 角色模板、数字人实例、团队、形象映射 |
+| 推理层 | `reasoner` / `offline_reasoner` / `factory` | 基线、组队、计划、执行、评审、汇总、对话 |
+| 记忆层 | `memory` | 每人一个记忆文件：事实、偏好、最近会话 |
 
 ## 2. 模块清单
 
@@ -45,6 +58,9 @@ flowchart TD
 | `ai_team/personas.py` | `ROLES` `create_human()` `catalog_text()` | 8 个角色模板 + 姓名池 |
 | `ai_team/tasks.py` | `TaskGraph` | 校验、拓扑排序、就绪队列、进度 |
 | `ai_team/llm.py` | `ChatClient.complete()` | OpenAI 兼容 `/chat/completions`，仅标准库 |
+| `ai_team/memory.py` | `MemoryStore` | 按人持久化记忆、召回打分、清空 |
+| `ai_team/conversation.py` | `DigitalHumanChat` | 多轮对话：人设重建 + 记忆召回 + 落库 |
+| `ai_team/assets/avatars/` | 8 张角色形象 | 扁平插画头像，随运行目录复制 |
 | `ai_team/prompts.py` | 各阶段提示词 | 统一「只输出 JSON」约束与 schema |
 | `ai_team/reasoner.py` | `Reasoner` `LLMReasoner` | 真实模型实现，含一次 JSON 修复重试 |
 | `ai_team/offline_reasoner.py` | `OfflineReasoner` | 规则版：关键词选角、模板计划、结构化正文、规则评审 |
@@ -133,6 +149,44 @@ sequenceDiagram
 4. **规则回落**：真实模型任一环节失败（网络、限流、格式），自动改用 `OfflineReasoner` 的对应能力并写入 `events(kind=warn)`，保证运行不中断。
 5. **上下文裁剪**：上游产物按任务截断（默认每份 1600 字符，总量 6400），避免长上下文淹没任务指令。
 
+## 5.1 数字人对话与记忆（v0.2）
+
+**目标**：让每个角色像真人同事一样可被点名对话，且跨会话记住事实。
+
+对话链路：
+
+```
+用户输入 → 解析 @姓名/角色 → 载入 DigitalHuman + 记忆召回 Top-K
+        → 重建人设 system（每轮重建，避免历史稀释）
+        → 携带最近 N 轮对话（默认 8）
+        → 模型回复（失败回落规则对话）
+        → 落库：history + 可选记忆条目
+```
+
+关键约束：
+
+1. **每轮重建人设**：不复用上一轮的完整提示，避免轮次变多后人设漂移。
+2. **记忆分级**：`fact`（用户陈述的事实，如「周报按周一到周五统计」）、`preference`（偏好，如「结论先给」）、`note`（过程记录）。任务级一次性要求不写入长期记忆。
+3. **召回打分**：`score = 词面重合度 × 0.7 + 角色相关度 × 0.3 + 时间衰减`，取 Top 3，单条截断 200 字。
+4. **可见性**：写入记忆时 CLI 打印「已记住：…」；`ai-team memory` 可列出，`--forget` 可清空。
+5. **越权转交**：问到不属于本角色职责的问题时，回复中明确「这块由 X 负责」，不硬答。
+
+记忆文件（`.ai_team/memory/<human_id>.json`）：
+
+```json
+{
+  "human_id": "qa_engineer",
+  "name": "沈砚秋",
+  "notes": [{"ts": "2026-11-16 12:20", "kind": "fact", "text": "周报按周一到周五统计"}],
+  "history": [{"ts": "2026-11-16 12:21", "role": "user", "text": "..."},
+              {"ts": "2026-11-16 12:21", "role": "human", "text": "..."}]
+}
+```
+
+容量控制：`notes` 上限 50 条，`history` 上限 50 轮，超出按时间淘汰最旧。
+
+形象资源：`assets/avatars/<role>.jpg`（512px，约 40KB）。运行时复制到 `runs/<run_id>/assets/avatars/`，`team.md` 用相对路径引用，保证运行目录自包含、可离线渲染；图片缺失时降级为纯文字名片，不抛错。
+
 ## 6. 评审闭环设计
 
 - 评审器输入：任务定义 + 交付物要求 + 产物全文 + 基线验收标准。
@@ -173,10 +227,11 @@ export AITEAM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3   # 可选
 
 | 方向 | 落点 |
 | --- | --- |
+| 语音输出 | `conversation` 增加 TTS 适配层，`DigitalHuman.voice_id` 已是字段 |
 | 并行执行 | `orchestrator` 就绪任务按依赖层分组，线程池并发，`store` 需加锁 |
 | 工具调用 | `personas.RoleTemplate.tools` 已是字段，新增 `tools/` 执行器注册表 |
-| 长期记忆 | `DigitalHuman.memory` 迁到向量库，执行前检索 Top-K |
-| Web 入口 | `orchestrator` 与 `cli` 解耦，可挂 FastAPI 暴露 SSE 进度 |
+| 长期记忆 | 记忆库换成向量检索，召回接口不变（Top-K + 截断） |
+| Web 入口 | `conversation` 与 `cli` 解耦，可挂 FastAPI 暴露 SSE 对话与进度 |
 | 多团队/竞标 | 同基线生成两套团队，按评审得分择优 |
 
 ## 11. 目录结构
@@ -184,7 +239,8 @@ export AITEAM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3   # 可选
 ```
 ai-team/
 ├── ai_team/            # 核心包（零第三方依赖）
-├── tests/              # unittest，覆盖图校验、离线全流程、CLI
+├── assets/avatars/     # 8 个角色的形象资源
+├── tests/              # unittest，覆盖图校验、离线全流程、对话与记忆、CLI
 ├── docs/               # PRD、技术方案
 ├── examples/           # 示例目标
 ├── scripts/            # 推送/演示脚本
@@ -194,7 +250,7 @@ ai-team/
 
 ## 12. 测试策略
 
-- **单元**：`extract_json` 边界（代码块、前后解释、截断）、`TaskGraph` 环检测/就绪集、角色模板完整性。
-- **集成**：`mock` 提供方端到端跑一次，断言产物数量、最终报告包含目标与验收项、评审轮次受限。
-- **CLI**：`run`/`status`/`export` 返回码与关键输出。
+- **单元**：`extract_json` 边界（代码块、前后解释、截断）、`TaskGraph` 环检测/就绪集、角色模板完整性、记忆召回打分与容量淘汰。
+- **集成**：`mock` 提供方端到端跑一次，断言产物数量、最终报告包含目标与验收项、评审轮次受限；对话多轮不漂移、跨运行记忆可复述。
+- **CLI**：`run`/`status`/`export`/`talk`/`memory` 返回码与关键输出。
 - 全部测试无网络依赖，可直接进 CI。

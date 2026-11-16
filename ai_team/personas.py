@@ -6,9 +6,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .models import DigitalHuman
+
+# 形象资源放在包内，随包分发；运行目录会复制一份保证自包含
+AVATAR_DIR = Path(__file__).resolve().parent / "assets" / "avatars"
+
+GREETINGS: Dict[str, str] = {
+    "product_manager": "我是{name}，产品负责人。先对齐目标：这次做到什么程度，你认为就算完成？",
+    "architect": "我是{name}，架构师。你先把目标和约束说清楚，我来告诉你结构上该怎么切、哪里会出问题。",
+    "backend_dev": "我是{name}，后端工程师。接口、数据和异常处理的问题都可以直接问我。",
+    "frontend_dev": "我是{name}，前端工程师。界面怎么组织、状态怎么流转，我们可以一步步对。",
+    "data_analyst": "我是{name}，数据分析师。指标口径和数据来源必须先说清楚，否则结论没有意义。",
+    "qa_engineer": "我是{name}，测试工程师。我会先从「怎么证明它达标」开始问。",
+    "tech_writer": "我是{name}，文档工程师。目标是让没有背景的人也能照着做完，你先告诉我是写给谁看的。",
+    "reviewer": "我是{name}，评审专家。我不参与产出，只负责对照验收标准挑问题。",
+}
 
 
 @dataclass(frozen=True)
@@ -140,6 +155,12 @@ def template(role_key: str) -> RoleTemplate:
         raise KeyError("未知角色：%s（可选 %s）" % (role_key, "、".join(ROLES)))
 
 
+def avatar_for(role_key: str) -> str:
+    """返回相对运行目录的头像路径；资源缺失时返回空串，调用方降级为文字名片。"""
+    path = AVATAR_DIR / ("%s.jpg" % role_key)
+    return "assets/avatars/%s.jpg" % role_key if path.exists() else ""
+
+
 def create_human(
     role_key: str,
     focus: str = "",
@@ -166,6 +187,10 @@ def create_human(
         responsibilities=list(tpl.responsibilities),
         boundaries=boundary,
         voice=tpl.voice,
+        avatar=avatar_for(role_key),
+        greeting=(GREETINGS.get(role_key) or "我是{name}，{title}。{mission}").format(
+            name=display_name, title=tpl.title, mission=tpl.mission
+        ),
     )
 
 

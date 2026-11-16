@@ -62,6 +62,8 @@ class DigitalHuman:
     responsibilities: List[str] = field(default_factory=list)
     boundaries: List[str] = field(default_factory=list)
     voice: str = ""
+    avatar: str = ""
+    greeting: str = ""
     memory: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -72,7 +74,7 @@ class DigitalHuman:
         d = _known_fields(cls, data)
         for key in ("skills", "responsibilities", "boundaries", "memory"):
             d[key] = _as_list(d.get(key))
-        for key in ("id", "name", "role", "title", "mission", "voice"):
+        for key in ("id", "name", "role", "title", "mission", "voice", "avatar", "greeting"):
             d[key] = str(d.get(key) or "")
         return cls(**d)
 

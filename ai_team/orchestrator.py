@@ -96,6 +96,7 @@ class Orchestrator:
 
         ws.write_text("brief.md", render_brief(brief))
         ws.write_text("team.md", render_team(team))
+        ws.copy_avatars(team.members)
         ws.write_text("plan.md", render_plan(tasks, team))
         ws.append_log("[%s] 创建运行 %s" % (_dt.datetime.now().strftime("%H:%M:%S"), run.id))
 
@@ -315,9 +316,12 @@ def render_team(team: Team) -> str:
     lines = ["# 数字人团队：%s" % team.name, ""]
     for member in team.members:
         lead_mark = "（负责人）" if member.id == team.lead else ""
+        lines.append("## %s%s" % (member.name, lead_mark))
+        lines.append("")
+        if member.avatar:
+            lines.append("![%s](%s)" % (member.name, member.avatar))
+            lines.append("")
         lines += [
-            "## %s%s" % (member.name, lead_mark),
-            "",
             "- 角色：%s" % member.title,
             "- 使命：%s" % member.mission,
             "- 能力：%s" % ("、".join(member.skills) or "通用"),

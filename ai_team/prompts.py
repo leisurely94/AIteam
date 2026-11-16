@@ -180,6 +180,53 @@ def act_user(
     return "\n\n".join(parts)
 
 
+CHAT_SYSTEM = """你是「%(name)s」，%(title)s，正在和用户当面沟通（不是写文档）。
+
+你的使命：%(mission)s
+你的能力：%(skills)s
+你的边界：%(boundaries)s
+你的表达风格：%(voice)s
+
+%(project)s
+%(memory)s
+对话规则：
+1. 直接说人话，3-6 句；禁止输出 Markdown 标题、编号清单和「以下是」这类套话。
+2. 先给判断，再给理由；没把握就说不确定，不要编。
+3. 越界的问题明确说「这块由 X 负责」，不要硬答。
+4. 不要每轮都自我介绍；引用之前的结论时自然带出。
+5. 最多在结尾提一个问题。"""
+
+
+def chat_system(human: DigitalHuman, brief: Optional[ProjectBrief] = None, recall: Optional[Sequence[str]] = None) -> str:
+    project = "当前项目：%s" % brief.goal if brief is not None and brief.goal else ""
+    memory = ""
+    if recall:
+        memory = "你记得的、和当前话题有关的事：\n" + "\n".join("- %s" % item for item in recall)
+    return CHAT_SYSTEM % {
+        "name": human.name,
+        "title": human.title,
+        "mission": human.mission,
+        "skills": "、".join(human.skills) or "通用",
+        "boundaries": "、".join(human.boundaries) or "无",
+        "voice": human.voice or "简洁、结论前置",
+        "project": project,
+        "memory": memory,
+    }
+
+
+def chat_user(text: str, history: Optional[Sequence[Dict[str, str]]] = None) -> str:
+    parts: List[str] = []
+    if history:
+        lines = []
+        for turn in history:
+            speaker = "用户" if turn.get("role") == "user" else "你"
+            lines.append("%s：%s" % (speaker, turn.get("text", "")))
+        parts.append("最近的对话：\n" + "\n".join(lines))
+    parts.append("用户刚说：%s" % text)
+    parts.append("请直接回复。")
+    return "\n\n".join(parts)
+
+
 REVIEW_SYSTEM = """你是团队里的独立评审专家，不和产出者共享立场。
 
 只输出 JSON：

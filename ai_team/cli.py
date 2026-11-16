@@ -6,10 +6,12 @@ import sys
 from typing import Dict, List, Optional, Sequence
 
 from .config import ConfigError, Settings, load_settings
+from .conversation import DigitalHumanChat
 from .export import ExportError, export_bundle, resolve_run_dir
-from .models import Run
+from .memory import MemoryStore, format_notes
+from .models import Run, Team
 from .orchestrator import Orchestrator, RunContext, render_team
-from .personas import ROLES, catalog_text
+from .personas import ROLE_CHAIN, ROLES, catalog_text, create_human
 from .workspace import RunWorkspace, find_run, latest_run, list_runs
 
 BANNER = "AI Team · 主入口对话驱动的数字人团队"
@@ -89,6 +91,174 @@ def _confirm(prompt: str, default: bool = True) -> bool:
     return raw in ("y", "yes", "是", "1")
 
 
+# ---------- 数字人团队 ----------
+
+
+def default_team() -> Team:
+    """没有运行记录时，用角色目录里的标准阵容。"""
+    members = [create_human(role) for role in ROLE_CHAIN]
+    if not any(m.role == "reviewer" for m in members):
+        members.append(create_human("reviewer"))
+    return Team(name="默认数字人团队", lead=members[0].id, members=members)
+
+
+def load_team(settings: Settings):
+    """优先用最近一次运行的真实团队与基线。"""
+    path = latest_run(settings.data_dir)
+    if path is not None:
+        run = RunWorkspace(settings.data_dir, path.name).load_run()
+        if run is not None and run.team and run.team.members:
+            return run.team, run.brief
+    return default_team(), None
+
+
+def resolve_human(team: Team, token: str):
+    token = (token or "").strip().lstrip("@")
+    if not token:
+        return None
+    for member in team.members:
+        if token in (member.name, member.id, member.role, member.title):
+            return member
+    for member in team.members:
+        if member.name.startswith(token) or member.role.startswith(token):
+            return member
+    return None
+
+
+def make_chat(settings: Settings, orchestrator: Orchestrator, human, brief) -> DigitalHumanChat:
+    return DigitalHumanChat(
+        human,
+        orchestrator.reasoner,
+        orchestrator.fallback,
+        MemoryStore(settings.data_dir),
+        brief,
+        emit=_emit,
+    )
+
+
+def _speak(chat: DigitalHumanChat, text: str) -> None:
+    result = chat.reply(text)
+    for note in result.get("remembered", []):  # type: ignore[union-attr]
+        _line("  （已记住：%s）" % note)
+    _line("%s > %s" % (chat.human.name, result["text"]))
+
+
+def _pick_human(team: Team):
+    _line("\n可对话的数字人：")
+    for index, member in enumerate(team.members, 1):
+        _line("  %d) %s（%s）" % (index, member.name, member.title))
+    try:
+        raw = input("选择序号或姓名 > ").strip()
+    except (EOFError, KeyboardInterrupt):
+        _line("")
+        return None
+    if raw.isdigit():
+        index = int(raw)
+        return team.members[index - 1] if 1 <= index <= len(team.members) else None
+    return resolve_human(team, raw)
+
+
+def cmd_talk(args) -> int:
+    settings = _build_settings(args)
+    orchestrator = Orchestrator(settings, emit=_emit)
+    team, brief = load_team(settings)
+
+    human = resolve_human(team, args.who or "")
+    if (args.who or "").strip() and human is None:
+        _line("没有找到「%s」。可选：%s" % (
+            args.who,
+            "、".join("%s（%s）" % (m.name, m.role) for m in team.members),
+        ))
+        return 2
+    if human is None:
+        human = _pick_human(team)
+        if human is None:
+            return 0
+
+    chat = make_chat(settings, orchestrator, human, brief)
+    _line("\n%s（%s）" % (human.name, human.title))
+    _line("%s > %s" % (human.name, chat.greeting()))
+    _line("（输入 /exit 结束，/memory 查看记忆）\n")
+
+    while True:
+        try:
+            text = input("你 > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            _line("\n再见。")
+            return 0
+        if not text:
+            continue
+        if text in ("/exit", "/quit", "exit", "quit"):
+            _line("再见。")
+            return 0
+        if text == "/memory":
+            notes = chat.memory.notes(human.id)
+            _line("\n%s记住的事：\n%s\n" % (human.name, format_notes(notes)))
+            continue
+        _speak(chat, text)
+
+
+def cmd_memory(args) -> int:
+    settings = _build_settings(args)
+    store = MemoryStore(settings.data_dir)
+    token = (args.who or "").strip()
+
+    if not token:
+        rows = store.all()
+        if not rows:
+            _line("还没有任何记忆。先和数字人聊几句：ai-team talk <姓名>")
+            return 0
+        _line("记忆总览：\n")
+        for payload in rows:
+            notes = payload.get("notes") or []
+            _line("  %-14s %-8s 记忆 %d 条，会话 %d 轮"
+                  % (payload.get("human_id", ""), payload.get("name", ""),
+                     len(notes), len(payload.get("history") or [])))
+        _line("\n查看某人的记忆：ai-team memory <姓名>；清空：ai-team memory <姓名> --forget")
+        return 0
+
+    payload = next(
+        (p for p in store.all() if token in (p.get("human_id"), p.get("name") or "")), None
+    )
+    if payload is None:
+        payload = next(
+            (p for p in store.all() if str(p.get("name", "")).startswith(token)), None
+        )
+    if payload is None:
+        _line("没有找到「%s」的记忆。可用：%s" % (
+            token, "、".join(str(p.get("name")) for p in store.all()) or "无",
+        ))
+        return 2
+
+    if args.forget:
+        count = store.clear_notes(payload["human_id"])
+        _line("已清空 %s 的 %d 条长期记忆。" % (payload.get("name", token), count))
+        return 0
+
+    _line("\n%s（%s）的记忆：\n" % (payload.get("name", ""), payload.get("human_id", "")))
+    _line(format_notes(payload.get("notes") or []))
+    _line("")
+    return 0
+
+
+def cmd_team(args) -> int:
+    settings = _build_settings(args)
+    team, brief = load_team(settings)
+    _print_team(team)
+    _line("")
+    for member in team.members:
+        _line("%s（%s）" % (member.name, member.title))
+        _line("    头像：%s" % (member.avatar or "（无，降级为文字名片）"))
+        _line("    开场：%s" % (member.greeting or "—"))
+    path = latest_run(settings.data_dir)
+    if path is not None:
+        _line("\n名片文档：%s/team.md" % path)
+    if brief is not None:
+        _line("当前项目：%s" % brief.goal)
+    _line("\n和某人单聊：ai-team talk <姓名>")
+    return 0
+
+
 # ---------- 命令实现 ----------
 
 
@@ -137,7 +307,8 @@ def cmd_chat(args) -> int:
     settings = _build_settings(args)
     orchestrator = Orchestrator(settings, emit=_emit)
     _line(BANNER)
-    _line("描述你的目标，我来组建数字人团队并把项目做完。输入 /exit 退出。\n")
+    _line("描述你的目标，我来组建数字人团队并把项目做完。")
+    _line("想找某个数字人单聊，输入 @姓名 你的问题，例如 @林知远 周报先做什么。输入 /exit 退出。\n")
 
     while True:
         try:
@@ -150,6 +321,23 @@ def cmd_chat(args) -> int:
         if goal in ("/exit", "/quit", "exit", "quit"):
             _line("再见。")
             return 0
+
+        if goal.startswith("@"):
+            token, _, text = goal[1:].partition(" ")
+            team, brief = load_team(settings)
+            human = resolve_human(team, token)
+            if human is None:
+                _line("没有这个数字人。可用：%s" % "、".join(m.name for m in team.members))
+                _line("")
+                continue
+            chat = make_chat(settings, orchestrator, human, brief)
+            if not text.strip():
+                _line("%s > %s" % (human.name, chat.greeting()))
+                _line("")
+                continue
+            _speak(chat, text.strip())
+            _line("")
+            continue
 
         answers = _ask_answers(orchestrator.clarify(goal))
         design = orchestrator.design(goal, answers)
@@ -301,6 +489,21 @@ def build_parser() -> argparse.ArgumentParser:
     roles_p = sub.add_parser("roles", help="查看角色目录")
     _add_common(roles_p)
     roles_p.set_defaults(func=cmd_roles, provider="", model="", max_rework=-1)
+
+    team_p = sub.add_parser("team", help="查看数字人团队与名片")
+    _add_common(team_p)
+    team_p.set_defaults(func=cmd_team, provider="", model="", max_rework=-1)
+
+    talk_p = sub.add_parser("talk", help="与某个数字人多轮对话")
+    talk_p.add_argument("who", nargs="?", default="", help="姓名或角色 key，缺省则选择")
+    _add_common(talk_p)
+    talk_p.set_defaults(func=cmd_talk, provider="", model="", max_rework=-1)
+
+    memory_p = sub.add_parser("memory", help="查看或清空数字人的记忆")
+    memory_p.add_argument("who", nargs="?", default="", help="姓名或角色 key，缺省查看总览")
+    memory_p.add_argument("--forget", action="store_true", help="清空该数字人的长期记忆")
+    _add_common(memory_p)
+    memory_p.set_defaults(func=cmd_memory, provider="", model="", max_rework=-1)
 
     init_p = sub.add_parser("init", help="初始化数据目录")
     _add_common(init_p)

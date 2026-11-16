@@ -23,6 +23,8 @@ from .prompts import (
     act_system,
     act_user,
     brief_user,
+    chat_system,
+    chat_user,
     clarify_user,
     integrate_user,
     plan_user,
@@ -65,6 +67,16 @@ class Reasoner:
         raise NotImplementedError
 
     def integrate(self, brief: ProjectBrief, team: Team, rows: Sequence[Dict[str, str]]) -> str:
+        raise NotImplementedError
+
+    def converse(
+        self,
+        human: DigitalHuman,
+        text: str,
+        history: Optional[Sequence[Dict[str, str]]] = None,
+        recall: Optional[Sequence[str]] = None,
+        brief: Optional[ProjectBrief] = None,
+    ) -> str:
         raise NotImplementedError
 
 
@@ -247,6 +259,24 @@ class LLMReasoner(Reasoner):
             max_tokens=4000,
             temperature=0.3,
         )
+
+    def converse(
+        self,
+        human: DigitalHuman,
+        text: str,
+        history: Optional[Sequence[Dict[str, str]]] = None,
+        recall: Optional[Sequence[str]] = None,
+        brief: Optional[ProjectBrief] = None,
+    ) -> str:
+        answer = self._ask(
+            chat_system(human, brief, recall),
+            chat_user(text, history),
+            max_tokens=1200,
+            temperature=0.6,
+        )
+        if len(answer.strip()) < 10:
+            raise ReasonerError("对话回复过短，疑似模型空转")
+        return answer.strip()
 
 
 def dump_structure() -> str:
