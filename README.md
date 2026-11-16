@@ -62,7 +62,7 @@ $ ai-team talk 沈砚秋
 零第三方依赖，只要 Python 3.9+。
 
 ```bash
-git clone https://github.com/<you>/ai-team.git
+git clone https://github.com/leisurely94/ai-team.git
 cd ai-team
 
 # 1. 用示例目标跑一次完整流程（离线规则实现，不需要密钥）
