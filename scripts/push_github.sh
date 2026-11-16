@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # 在 GitHub 上创建仓库并推送当前目录。
 #
-# 用法：
+# 用法（任选其一）：
 #   GITHUB_TOKEN=ghp_xxx ./scripts/push_github.sh [仓库名] [public|private]
+#   gh auth login && ./scripts/push_github.sh [仓库名] [public|private]
 #
 # 说明：
 # - Token 需要 repo 权限（classic）或对目标仓库有 Contents 读写（fine-grained）。
@@ -12,16 +13,31 @@ set -euo pipefail
 
 NAME="${1:-ai-team}"
 VISIBILITY="${2:-public}"
-PRIVATE="false"
-if [ "$VISIBILITY" = "private" ]; then PRIVATE="true"; fi
+DESC="AI team · 主入口对话驱动的数字人团队：说清目标，自动组队、对话、记忆并把项目做完"
 
+# 方式一：已用 gh 登录，交给 gh 建仓并推送
 if [ -z "${GITHUB_TOKEN:-}" ]; then
-  echo "缺少 GITHUB_TOKEN。示例：GITHUB_TOKEN=ghp_xxx ./scripts/push_github.sh ai-team public" >&2
+  if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    if gh repo view "${NAME}" >/dev/null 2>&1; then
+      echo "仓库已存在，直接推送"
+      git remote get-url origin >/dev/null 2>&1 || gh repo set-default "$(gh api user --jq .login)/${NAME}" >/dev/null 2>&1 || true
+      git push -u origin main
+    else
+      gh repo create "${NAME}" --"${VISIBILITY}" --source=. --remote=origin --push --description "${DESC}"
+    fi
+    echo "完成：$(gh repo view "${NAME}" --json url --jq .url 2>/dev/null || echo "https://github.com/$(gh api user --jq .login)/${NAME}")"
+    exit 0
+  fi
+  echo "缺少 GITHUB_TOKEN，且 gh 未登录。" >&2
+  echo "先执行：gh auth login --hostname github.com --git-protocol https --web --scopes repo" >&2
+  echo "或：GITHUB_TOKEN=ghp_xxx ./scripts/push_github.sh ${NAME} ${VISIBILITY}" >&2
   exit 2
 fi
 
 API="https://api.github.com"
 AUTH_HEADER=(-H "Authorization: Bearer ${GITHUB_TOKEN}" -H "Accept: application/vnd.github+json")
+PRIVATE="false"
+if [ "$VISIBILITY" = "private" ]; then PRIVATE="true"; fi
 
 LOGIN=$(curl -fsS "${AUTH_HEADER[@]}" "${API}/user" | python3 -c 'import json,sys; print(json.load(sys.stdin)["login"])')
 if [ -z "$LOGIN" ]; then
@@ -35,7 +51,7 @@ if curl -fsS "${AUTH_HEADER[@]}" "${API}/repos/${LOGIN}/${NAME}" >/dev/null 2>&1
 else
   echo "创建仓库：${LOGIN}/${NAME}（${VISIBILITY}）"
   curl -fsS -X POST "${AUTH_HEADER[@]}" "${API}/user/repos" \
-    -d "{\"name\":\"${NAME}\",\"private\":${PRIVATE},\"description\":\"主入口对话驱动的数字人团队：说清目标，自动组队并把项目做完\",\"auto_init\":false}" \
+    -d "{\"name\":\"${NAME}\",\"private\":${PRIVATE},\"description\":\"${DESC}\",\"auto_init\":false}" \
     >/dev/null
 fi
 

@@ -129,6 +129,19 @@ ai-team demo
 | `ai-team roles` | 查看 8 个角色模板的职责与产出章节 |
 | `ai-team init` | 初始化数据目录 |
 
+## 发布到 GitHub
+
+GitHub 仓库名不支持空格，所以仓库用 `ai-team`，展示名与描述保留「AI team」。
+
+```bash
+# 方式一：用 gh 登录后一键建仓并推送
+gh auth login --hostname github.com --git-protocol https --web --scopes repo
+./scripts/push_github.sh            # 默认 ai-team，public
+
+# 方式二：用 PAT（token 不会写进 .git/config）
+GITHUB_TOKEN=ghp_xxx ./scripts/push_github.sh ai-team public
+```
+
 ## 接入真实模型
 
 默认 `provider=mock`（规则实现，离线可跑、结果稳定，用于演示与回归）。接真实模型只需环境变量：
