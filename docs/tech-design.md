@@ -214,7 +214,11 @@ export AITEAM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3   # 可选
 | `chat`（默认） | `POST {base_url}/chat/completions` | `messages[]` + `max_tokens` | `choices[0].message.content` |
 | `responses` | `POST {base_url}/responses` | `input[]` + `max_output_tokens` | `output_text` 或 `output[].content[].output_text` |
 
-`hub` provider 预置 `base_url=https://dataagent-dev-llm.bytedance.net/v1`、`model=gpt-5.6-terra`、`wire_api=responses`，密钥读 `AITEAM_API_KEY` / `MODEL_HUB_API_KEY` / `OPENAPI_SK`。解析逻辑对两种结构都做了兜底：只要响应里存在 `output_text`、`output[]` 的文本块、或 `choices[]`，都能取到正文；三者皆空才抛 `LLMError`。
+`hub` provider 预置 `base_url=https://dataagent-dev-llm.bytedance.net/v1`、`model=gpt-5.6-terra`、`wire_api=responses`，密钥读 `AITEAM_API_KEY` / `MODEL_HUB_API_KEY` / `OPENAPI_SK`。
+
+`gateway` provider 预置企业 Agent 网关 `https://agentgateway-aii.datarangers-onpremise.volces.com/v1`、`model=doubao-seed-2.1-lite`、`wire_api=chat`，密钥读 `AITEAM_API_KEY` / `GATEWAY_API_KEY`。该网关用别名路由到真实模型（`doubao-seed-2.1-lite` → `doubao-seed-2-1-lite-260915`），换模型只改 `AITEAM_MODEL`。
+
+解析逻辑对两种结构都做了兜底：只要响应里存在 `output_text`、`output[]` 的文本块、或 `choices[]`，都能取到正文；三者皆空才抛 `LLMError`。
 
 ## 8. 错误处理与可观测
 

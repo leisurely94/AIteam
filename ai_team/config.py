@@ -33,6 +33,11 @@ PROVIDER_DEFAULTS = {
         "model": "gpt-5.6-terra",
         "wire_api": "responses",
     },
+    "gateway": {
+        "base_url": "https://agentgateway-aii.datarangers-onpremise.volces.com/v1",
+        "model": "doubao-seed-2.1-lite",
+        "wire_api": "chat",
+    },
     "mock": {"base_url": "", "model": "", "wire_api": "chat"},
 }
 
@@ -40,6 +45,7 @@ API_KEY_ENV = {
     "ark": ("AITEAM_API_KEY", "ARK_API_KEY", "DOUBAO_API_KEY"),
     "openai": ("AITEAM_API_KEY", "OPENAI_API_KEY"),
     "hub": ("AITEAM_API_KEY", "MODEL_HUB_API_KEY", "OPENAPI_SK"),
+    "gateway": ("AITEAM_API_KEY", "GATEWAY_API_KEY"),
     "mock": (),
 }
 
@@ -114,6 +120,6 @@ def load_settings(
     else:
         raw = os.environ.get("AITEAM_MAX_REWORK", "").strip()
         settings = replace(settings, max_rework=int(raw) if raw.isdigit() else 1)
-    if not settings.wire_api:
+    if not settings.wire_api and provider in PROVIDER_DEFAULTS:
         settings.wire_api = PROVIDER_DEFAULTS[provider]["wire_api"]
     return settings.check()

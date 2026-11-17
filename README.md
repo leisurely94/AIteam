@@ -173,10 +173,10 @@ GITHUB_TOKEN=ghp_xxx ./scripts/push_github.sh ai-team public
 
 
 ```
-export AITEAM_PROVIDER=ark              # ark | openai | hub | mock
-export AITEAM_API_KEY=...               # ark 也可用 ARK_API_KEY；hub 也可用 MODEL_HUB_API_KEY
-export AITEAM_MODEL=doubao-seed-2-1-lite-260915
-export AITEAM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3   # 可选，默认已填
+export AITEAM_PROVIDER=gateway          # gateway | ark | openai | hub | mock
+export AITEAM_API_KEY=sk-...            # ark 也可用 ARK_API_KEY；hub 也可用 MODEL_HUB_API_KEY；gateway 也可用 GATEWAY_API_KEY
+export AITEAM_MODEL=doubao-seed-2.1-lite
+export AITEAM_BASE_URL=https://agentgateway-aii.datarangers-onpremise.volces.com/v1
 ```
 
 两种接口形态都支持，用 `AITEAM_WIRE_API` 切换：
@@ -185,11 +185,24 @@ export AITEAM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3   # 可选，默
 - `responses`：`POST {base_url}/responses`，适配 Model Hub / OpenAI Responses 风格网关
 
 ```bash
+# 企业 Agent 网关（多模型统一入口）
+export AITEAM_PROVIDER=gateway        # 默认 base_url + doubao-seed-2.1-lite + chat
+export AITEAM_API_KEY=sk-...
+python3 -m ai_team talk 沈砚秋
+
 # 内网 Model Hub 示例
 export AITEAM_PROVIDER=hub            # 默认 base_url + gpt-5.6-terra + responses
 export AITEAM_API_KEY=<网关签发的 token>
 python3 -m ai_team talk 沈砚秋
 ```
+
+`gateway` 网关支持切换模型，直接改 `AITEAM_MODEL` 即可：
+
+| 类别 | 可选模型 |
+| --- | --- |
+| 豆包 | `doubao-seed-2.1-lite`、`doubao-seed-2.1-pro`、`doubao-seed-2.0-mini`、`doubao-seed-evolving` |
+| DeepSeek | `deepseek-v4-flash`、`deepseek-v4-pro`、`deepseek-v4.1-flash` |
+| 其他 | `glm-5.2`、`glm-5.3`、`glm-5.3-flash`、`kimi-k3.1-pro`、`kimi-k3` |
 
 其他可调项：
 
