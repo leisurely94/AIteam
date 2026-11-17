@@ -131,6 +131,7 @@ class Orchestrator:
         tasks: List[Task] = design["tasks"]        # type: ignore[assignment]
         positions: List[Position] = design.get("positions") or []  # type: ignore[assignment]
         positions, team = self._ensure_recruiter(brief, positions, team)
+        self._assign_roles(tasks, team)   # 外部传入 design 时也要保证每个任务有人
 
         run_id = make_run_id(goal)
         ws = RunWorkspace(self.settings.data_dir, run_id).ensure()
@@ -169,9 +170,18 @@ class Orchestrator:
         self._onboard(ctx)
 
         pm = self._pm(ctx)
-        reviewer = run.team.by_role("reviewer") or next(
+        reviewer = run.team.by_role("reviewer")
+        if reviewer is not None and not reviewer.onboarded:
+            # 未通过考核的评审不能给别人的产出下结论，改用已上岗成员或项目经理兜底
+            self._event(ctx, "warn", "评审专家未通过上岗考核，改由已上岗成员承担独立评审")
+            reviewer = None
+        reviewer = reviewer or next(
             (m for m in run.team.members if m.onboarded and (pm is None or m.id != pm.id)), None
         )
+        if reviewer is None and pm is not None:
+            # 全员未上岗时由项目经理兼独立评审，至少保证每份产出有人对照验收标准
+            self._event(ctx, "warn", "无已上岗成员可评审，项目经理兼任独立评审")
+            reviewer = pm
         if reviewer is None:
             raise RuntimeError("团队为空，无法执行")
 

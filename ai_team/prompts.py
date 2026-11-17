@@ -128,14 +128,14 @@ def train_user(human: DigitalHuman, brief: ProjectBrief, focus_note: str = "") -
     return "\n\n".join(parts)
 
 
-ANSWER_EXAM_SYSTEM = """你是「%(name)s」，%(title)s，正在参加上岗考试。请按你的岗位职责和本项目要求作答。
+ANSWER_EXAM_SYSTEM = """你是「%(name)s」，%(title)s，正在参加上岗考试。可以查阅下面给你的上岗培训材料（开卷考试），按岗位职责和本项目要求作答。
 
 只输出 JSON：
 {"answers": ["第1题答案", "第2题答案", "第3题答案"]}
 
 规则：
-1. 每题回答 80-200 字，必须结合本项目，不要背通用理论。
-2. 明确写出你会怎么做、判断标准是什么、出问题怎么处理。
+1. 每题 150-300 字，逐条对应题目要求（如「3 项」就明确写第 1/2/3 条），不要写笼统口号。
+2. 答案要落到本项目：引用培训材料里的具体字段、指标、流程名称，写清「怎么做、判断标准、出问题怎么处理」。
 3. 不要输出任何解释文字。"""
 
 
@@ -144,12 +144,20 @@ def answer_exam_system(human: DigitalHuman) -> str:
 
 
 def answer_exam_user(brief: ProjectBrief, plan, focus_note: str = "") -> str:
-    lines = ["项目目标：%s" % brief.goal, "验收标准：%s" % "；".join(brief.acceptance), "", "考题："]
+    lines = [
+        "项目目标：%s" % brief.goal,
+        "验收标准：%s" % "；".join(brief.acceptance),
+        "",
+        "上岗培训材料（开卷可引用）：",
+        (plan.material or "")[:2600],
+        "",
+        "考题：",
+    ]
     for index, question in enumerate(plan.questions, 1):
         lines.append("%d. %s" % (index, question.get("q", "")))
     if focus_note:
         lines.append("\n上次考核暴露的问题（这次必须答到）：%s" % focus_note)
-    lines.append("\n请输出 JSON。")
+    lines.append("\n请逐题作答，输出 JSON。")
     return "\n".join(lines)
 
 
@@ -159,11 +167,13 @@ GRADE_SYSTEM = """你是项目经理，正在给候选人判卷。按采分点�
 {"score": 0-100 的整数, "issues": ["缺了哪个采分点、应该补什么"], "summary": "一句话结论"}
 
 评分规则：
-1. 三道题分值 34/33/33，按采分点命中给分；只写口号没写做法的不得分。
-2. 未覆盖项目约束、验收口径或返工流程的，必须扣分并写进 issues。
-3. score >= 80 视为通过；低于 80 时 issues 至少 2 条，说明重训重点。
-4. 不要放水：满分只在三题全部命中全部采分点时才给。
-5. 不要输出任何解释文字。"""
+1. 三道题分值 34/33/33；每题按采分点命中比例给分（命中 k/n 条得 分值×k/n），取整。
+2. 同义表述算命中：只要答出了采分点的实质做法就给分，不因措辞、格式、篇幅、顺序不同扣分。
+3. 完全没提到该采分点的，才算缺失；只写口号没写做法的不得分。
+4. 未覆盖项目约束、验收口径或返工流程的，必须扣分并写进 issues。
+5. score >= 80 视为通过；低于 80 时 issues 至少 2 条，说明重训重点。
+6. 不要放水：满分只在三题全部命中全部采分点时才给。
+7. 不要输出任何解释文字。"""
 
 
 def grade_exam_user(human: DigitalHuman, brief: ProjectBrief, plan, answers: list) -> str:
