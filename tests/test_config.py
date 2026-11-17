@@ -39,6 +39,16 @@ class GatewayProviderTest(unittest.TestCase):
             with self.assertRaises(ConfigError):
                 load_settings()
 
+    def test_gateway_default_timeout(self):
+        env = {"AITEAM_PROVIDER": "gateway", "AITEAM_API_KEY": "sk-test", "AITEAM_TIMEOUT": ""}
+        with mock.patch.dict(os.environ, env, clear=False):
+            self.assertEqual(load_settings().timeout, 300)
+
+    def test_timeout_env_overrides(self):
+        env = {"AITEAM_PROVIDER": "gateway", "AITEAM_API_KEY": "sk-test", "AITEAM_TIMEOUT": "90"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            self.assertEqual(load_settings().timeout, 90)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -37,6 +37,7 @@ PROVIDER_DEFAULTS = {
         "base_url": "https://agentgateway-aii.datarangers-onpremise.volces.com/v1",
         "model": "doubao-seed-2.1-lite",
         "wire_api": "chat",
+        "timeout": 300,
     },
     "mock": {"base_url": "", "model": "", "wire_api": "chat"},
 }
@@ -98,6 +99,14 @@ def _first_env(*names: str) -> str:
     return ""
 
 
+def _resolve_timeout(provider: str) -> int:
+    """超时优先读环境变量，否则用 provider 默认值（长文本网关给更长超时）。"""
+    raw = os.environ.get("AITEAM_TIMEOUT", "").strip()
+    if raw.isdigit():
+        return int(raw)
+    return int(PROVIDER_DEFAULTS.get(provider, {}).get("timeout", 120))
+
+
 def load_settings(
     provider: str = "",
     model: str = "",
@@ -113,7 +122,7 @@ def load_settings(
         wire_api=os.environ.get("AITEAM_WIRE_API", "").strip(),
         api_key=_first_env(*API_KEY_ENV.get(provider, ("AITEAM_API_KEY",))),
         data_dir=data_dir or os.environ.get("AITEAM_DATA_DIR", "").strip() or ".ai_team",
-        timeout=int(os.environ.get("AITEAM_TIMEOUT", "120") or 120),
+        timeout=_resolve_timeout(provider),
     )
     if max_rework >= 0:
         settings = replace(settings, max_rework=max_rework)
