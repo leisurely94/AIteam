@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Sequence
 from .config import ConfigError, Settings, load_settings
 from .conversation import DigitalHumanChat
 from .export import ExportError, export_bundle, resolve_run_dir
+from .knowledge import KnowledgeBase
 from .memory import MemoryStore, format_notes
 from .models import Run, Team
 from .orchestrator import Orchestrator, RunContext, render_team
@@ -32,8 +33,9 @@ def _emit(kind: str, message: str) -> None:
 def _print_team(team) -> None:
     _line("\n团队：%s（%d 人）" % (team.name, len(team.members)))
     for member in team.members:
-        lead = " [lead]" if member.id == team.lead else ""
-        _line("  · %s（%s）%s — %s" % (member.name, member.title, lead, member.mission))
+        lead = " [招募人/lead]" if member.id == team.lead else ""
+        _line("  · %s（%s）%s — %s ｜ %s"
+              % (member.name, member.title, lead, member.mission, member.onboard_text))
 
 
 def _print_summary(run: Run) -> None:
@@ -247,15 +249,36 @@ def cmd_team(args) -> int:
     _print_team(team)
     _line("")
     for member in team.members:
-        _line("%s（%s）" % (member.name, member.title))
+        _line("%s（%s）　%s" % (member.name, member.title, member.onboard_text))
         _line("    头像：%s" % (member.avatar or "（无，降级为文字名片）"))
         _line("    开场：%s" % (member.greeting or "—"))
     path = latest_run(settings.data_dir)
     if path is not None:
         _line("\n名片文档：%s/team.md" % path)
+        if (path / "positions.md").exists():
+            _line("岗位清单：%s/positions.md" % path)
+        if (path / "exam-results.md").exists():
+            _line("上岗考核：%s/exam-results.md" % path)
     if brief is not None:
         _line("当前项目：%s" % brief.goal)
     _line("\n和某人单聊：ai-team talk <姓名>")
+    return 0
+
+
+def cmd_kb(args) -> int:
+    settings = _build_settings(args)
+    kb = KnowledgeBase(settings.data_dir)
+    rows = kb.search(args.query or "", args.tag or "", limit=args.limit)
+    if not rows:
+        _line("知识库还没有条目。跑一次 run/demo 后，项目经理会沉淀经验。")
+        return 0
+    _line("知识库条目：%d 条（当前展示 %d 条）\n" % (kb.count(), len(rows)))
+    for note in rows:
+        tags = "、".join(note.get("tags") or []) or "无"
+        _line("· %s" % note.get("title", ""))
+        _line("    标签：%s　来源：%s　%s" % (tags, note.get("run_id", ""), note.get("created", "")))
+        _line("    %s" % str(note.get("body", ""))[:200])
+    _line("\n完整索引：%s/kb.md" % kb.root)
     return 0
 
 
@@ -296,6 +319,8 @@ def cmd_run(args) -> int:
         _line("  %s %s ← %s" % (task.id, task.title, "、".join(task.depends_on) or "起点"))
 
     run = orchestrator.execute(ctx)
+    _line("\n上岗结果：")
+    _print_team(run.team)
     _print_summary(run)
     if args.report:
         _print_report_head(run, settings.data_dir)
@@ -383,14 +408,27 @@ def cmd_status(args) -> int:
     _line("目标：%s" % run.goal)
     _line("状态：%s　　目录：%s" % (run.status, run.dir))
     _line("团队：%s（%d 人）" % (run.team.name, len(run.team.members)))
+    if run.positions:
+        _line("岗位：%s" % "、".join("%s×%d" % (p.title, p.headcount) for p in run.positions))
+    if run.exams:
+        _line("上岗：%s" % "、".join(
+            "%s %d分%s" % (
+                next((m.name for m in run.team.members if m.id == e.human_id), e.human_id),
+                e.score, "通过" if e.passed else "未通过",
+            ) for e in run.exams
+        ))
     _line("\n任务：")
     names = {member.id: member.name for member in run.team.members}
     for task in run.tasks:
         verdict = (task.review or {}).get("verdict", "-")
-        _line("  [%-7s] %-4s %s　负责人：%s　评审：%s"
-              % (task.status, task.id, task.title, names.get(task.assignee, task.assignee), verdict))
+        pm_verdict = (task.pm_review or {}).get("verdict", "-")
+        _line("  [%-7s] %-4s %s　负责人：%s　评审：%s　PM复核：%s"
+              % (task.status, task.id, task.title, names.get(task.assignee, task.assignee), verdict, pm_verdict))
         if task.artifact:
             _line("           %s" % task.artifact)
+    if run.retrospective is not None:
+        _line("\n复盘：%s" % (run.retrospective.summary or "见 retrospective.md"))
+        _line("  retrospective.md　知识库：ai-team kb")
     return 0
 
 
@@ -451,7 +489,7 @@ def _add_common(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--data-dir", dest="data_dir", default=argparse.SUPPRESS,
                         help="运行数据目录，默认 .ai_team")
     parser.add_argument("--provider", dest="provider", default=argparse.SUPPRESS,
-                        choices=["mock", "ark", "openai"], help="模型提供方")
+                        choices=["mock", "ark", "openai", "hub", "gateway"], help="模型提供方")
     parser.add_argument("--model", dest="model", default=argparse.SUPPRESS, help="模型名")
     parser.add_argument("--max-rework", dest="max_rework", type=int, default=argparse.SUPPRESS,
                         help="评审返工轮数上限，默认 1")
@@ -505,6 +543,13 @@ def build_parser() -> argparse.ArgumentParser:
     memory_p.add_argument("--forget", action="store_true", help="清空该数字人的长期记忆")
     _add_common(memory_p)
     memory_p.set_defaults(func=cmd_memory, provider="", model="", max_rework=-1)
+
+    kb_p = sub.add_parser("kb", help="查看跨运行知识库")
+    kb_p.add_argument("query", nargs="?", default="", help="按关键词搜索")
+    kb_p.add_argument("--tag", default="", help="按标签过滤")
+    kb_p.add_argument("--limit", type=int, default=20, help="展示条数上限")
+    _add_common(kb_p)
+    kb_p.set_defaults(func=cmd_kb, provider="", model="", max_rework=-1)
 
     init_p = sub.add_parser("init", help="初始化数据目录")
     _add_common(init_p)

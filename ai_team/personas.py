@@ -15,6 +15,7 @@ from .models import DigitalHuman
 AVATAR_DIR = Path(__file__).resolve().parent / "assets" / "avatars"
 
 GREETINGS: Dict[str, str] = {
+    "project_manager": "我是{name}，本项目的项目经理。人我来招，岗我来定，考不过不上岗；你要的是结果，我盯的是过程和交付。",
     "product_manager": "我是{name}，产品负责人。先对齐目标：这次做到什么程度，你认为就算完成？",
     "architect": "我是{name}，架构师。你先把目标和约束说清楚，我来告诉你结构上该怎么切、哪里会出问题。",
     "backend_dev": "我是{name}，后端工程师。接口、数据和异常处理的问题都可以直接问我。",
@@ -39,6 +40,26 @@ class RoleTemplate:
 
 
 ROLES: Dict[str, RoleTemplate] = {
+    "project_manager": RoleTemplate(
+        key="project_manager",
+        title="项目经理",
+        mission="为本项目配齐能干活的人：定岗、招募、培训考核、复核产出、复盘沉淀",
+        skills=("岗位设计", "人才招募", "培训与考核", "交付复核", "复盘与知识沉淀"),
+        responsibilities=(
+            "根据基线定义岗位清单（岗位、人数、职责、能力要求、考核重点）",
+            "招募并创建团队角色，保证每个交付物有人负责",
+            "组织上岗培训与考试，考试通过才允许上岗",
+            "复核每个成员的产出可交付性与过程风险",
+            "复盘项目过程，推动角色能力提升与流程优化，沉淀知识库",
+        ),
+        boundaries=(
+            "不承担具体业务产出任务",
+            "不替产品负责人修改需求范围",
+            "不放过未通过考核就上岗的情况",
+        ),
+        voice="先定标准再谈执行，结论明确、追问题到人到证据",
+        sections=("岗位清单", "招募理由", "培训与考核要点", "复核记录", "复盘与改进"),
+    ),
     "product_manager": RoleTemplate(
         key="product_manager",
         title="产品负责人",
@@ -123,6 +144,7 @@ ROLES: Dict[str, RoleTemplate] = {
 
 # 角色 → 默认姓名（虚构，仅用于人设可读性）
 NAMES: Dict[str, Tuple[str, ...]] = {
+    "project_manager": ("陆则明",),
     "product_manager": ("林知远",),
     "architect": ("周砚舟",),
     "backend_dev": ("陈墨白", "许行舟"),
@@ -136,8 +158,12 @@ NAMES: Dict[str, Tuple[str, ...]] = {
 # 负责「产出实现」的角色，规划阶段常作为并行分支
 BUILD_ROLES: Tuple[str, ...] = ("backend_dev", "frontend_dev", "data_analyst")
 
-# 规划时的默认链路：产品 → 架构 → 实现 → 测试 → 文档
+# 招募人：每次运行默认创建，不承担业务任务
+RECRUITER_ROLE = "project_manager"
+
+# 规划时的默认链路：项目经理 → 产品 → 架构 → 实现 → 测试 → 文档
 ROLE_CHAIN: Tuple[str, ...] = (
+    RECRUITER_ROLE,
     "product_manager",
     "architect",
     "backend_dev",

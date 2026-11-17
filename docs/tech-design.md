@@ -1,6 +1,6 @@
 # AI Team 技术方案
 
-> 版本：v0.2　对应 PRD：v0.2　最后更新：2026-11-16
+> 版本：v0.3　对应 PRD：v0.3　最后更新：2026-11-17
 
 ## 变更记录
 
@@ -8,6 +8,7 @@
 | --- | --- |
 | v0.1 | 五阶段编排、任务图、评审闭环、状态双写 |
 | v0.2 | 增加数字人对话引擎、跨运行记忆库、形象资源与名片渲染 |
+| v0.3 | 增加项目经理招募人、岗位清单、上岗培训考核闸门、双评审、复盘与跨运行知识库 |
 
 ## 1. 总体架构
 
@@ -16,8 +17,12 @@ flowchart TD
     U[用户] -->|目标 / 点名对话| E[主入口 CLI / chat]
     E --> C[澄清 Clarifier]
     C --> B[需求基线 Brief]
-    B --> R[组队 Roster]
-    R --> P[计划 Planner]
+    B --> PM[项目经理 PM<br/>默认招募人]
+    PM --> PO[岗位清单 Positions]
+    PO --> R[招募 Recruit<br/>创建数字人]
+    R --> OB[上岗闸门 Onboarding<br/>培训 → 出题 → 作答 → 判卷]
+    OB -->|≥80 分| P[计划 Planner]
+    OB -->|未通过| RJ[改派 / blocked + 留痕]
     P --> G[任务图 TaskGraph]
     G --> O[编排器 Orchestrator]
     O -->|任务+上下文| H1[数字人 A]
@@ -25,9 +30,14 @@ flowchart TD
     H1 --> AR[制品库 Artifacts]
     H2 --> AR
     AR --> RV[评审 Reviewer]
+    AR --> PMR[PM 复核]
     RV -->|changes| H2
+    PMR -->|changes| H2
     RV -->|pass| O
+    PMR -->|pass| O
     O --> F[汇总 Report]
+    O --> RT[复盘 Retrospect]
+    RT --> KB[(知识库 kb.json)]
     O --> S[(SQLite 状态库)]
     O --> L[事件日志]
     E -->|多轮会话| CV[对话引擎]
@@ -41,12 +51,12 @@ flowchart TD
 | 层 | 模块 | 职责 |
 | --- | --- | --- |
 | 入口层 | `cli` | 解析命令、交互澄清、点名对话、展示进度、导出 |
-| 编排层 | `orchestrator` | 阶段推进、任务调度、评审闭环、失败处理 |
+| 编排层 | `orchestrator` | 阶段推进、上岗闸门、任务调度、双评审闭环、复盘、失败处理 |
 | 对话层 | `conversation` | 人设提示重建、多轮上下文、记忆召回与写入 |
 | 协作层 | `tasks` / `store` / `workspace` | 任务图校验、状态持久化、产物与形象资源落盘 |
-| 角色层 | `personas` / `models` / `assets` | 角色模板、数字人实例、团队、形象映射 |
-| 推理层 | `reasoner` / `offline_reasoner` / `factory` | 基线、组队、计划、执行、评审、汇总、对话 |
-| 记忆层 | `memory` | 每人一个记忆文件：事实、偏好、最近会话 |
+| 角色层 | `personas` / `models` / `assets` | 角色模板、数字人实例、团队、岗位、形象映射 |
+| 推理层 | `reasoner` / `offline_reasoner` / `factory` | 基线、招募、培训、考试判卷、计划、执行、双评审、复盘、汇总、对话 |
+| 记忆层 | `memory` / `knowledge` | 每人一个记忆文件；跨运行知识库条目 |
 
 ## 2. 模块清单
 
@@ -54,21 +64,23 @@ flowchart TD
 | --- | --- | --- |
 | `ai_team/config.py` | `load_settings()` | 三级配置：命令行 > 环境变量 > 默认值 |
 | `ai_team/jsonutil.py` | `extract_json()` | 从模型输出中抽取 JSON，容忍代码块与前后说明 |
-| `ai_team/models.py` | `ProjectBrief` `DigitalHuman` `Team` `Task` `Message` `ReviewResult` `Run` | 纯数据结构，支持 dict 互转 |
-| `ai_team/personas.py` | `ROLES` `create_human()` `catalog_text()` | 8 个角色模板 + 姓名池 |
+| `ai_team/models.py` | `ProjectBrief` `DigitalHuman` `Team` `Task` `Message` `ReviewResult` `Run` `Position` `TrainingPlan` `ExamResult` `RetroItem` `KnowledgeNote` | 纯数据结构，支持 dict 互转 |
+| `ai_team/personas.py` | `ROLES` `create_human()` `catalog_text()` | 9 个角色模板（含项目经理）+ 姓名池 |
 | `ai_team/tasks.py` | `TaskGraph` | 校验、拓扑排序、就绪队列、进度 |
 | `ai_team/llm.py` | `ChatClient.complete()` | OpenAI 兼容 `/chat/completions`，仅标准库 |
 | `ai_team/memory.py` | `MemoryStore` | 按人持久化记忆、召回打分、清空 |
+| `ai_team/knowledge.py` | `KnowledgeBase` | 跨运行知识库：读写 `kb.json`、按标签召回、渲染 `kb.md` |
+| `ai_team/onboarding.py` | `OnboardingBoard` | 岗位清单/培训/考试/上岗结论的数据组织与 Markdown 渲染 |
 | `ai_team/conversation.py` | `DigitalHumanChat` | 多轮对话：人设重建 + 记忆召回 + 落库 |
-| `ai_team/assets/avatars/` | 8 张角色形象 | 扁平插画头像，随运行目录复制 |
+| `ai_team/assets/avatars/` | 9 张角色形象 | 扁平插画头像，随运行目录复制 |
 | `ai_team/prompts.py` | 各阶段提示词 | 统一「只输出 JSON」约束与 schema |
 | `ai_team/reasoner.py` | `Reasoner` `LLMReasoner` | 真实模型实现，含一次 JSON 修复重试 |
-| `ai_team/offline_reasoner.py` | `OfflineReasoner` | 规则版：关键词选角、模板计划、结构化正文、规则评审 |
+| `ai_team/offline_reasoner.py` | `OfflineReasoner` | 规则版：关键词选岗、模板培训与考试、规则评审、规则复盘 |
 | `ai_team/factory.py` | `build_reasoner()` | 按 provider 选择实现 |
 | `ai_team/store.py` | `RunStore` | SQLite 持久化 |
 | `ai_team/workspace.py` | `RunWorkspace` | 运行目录、产物路径、运行索引 |
-| `ai_team/orchestrator.py` | `Orchestrator.new_run()` / `.execute()` | 五阶段主流程 + 回落策略 |
-| `ai_team/cli.py` | `main()` | `init/run/chat/status/export/roles/demo` |
+| `ai_team/orchestrator.py` | `Orchestrator.design()` / `.start()` / `.execute()` | 七阶段主流程 + 上岗闸门 + 双评审 + 复盘 + 回落策略 |
+| `ai_team/cli.py` | `main()` | `init/run/chat/status/export/roles/kb/demo` |
 
 ## 3. 数据模型
 
@@ -76,11 +88,27 @@ flowchart TD
 
 ```python
 ProjectBrief(goal, background, deliverables[], constraints[], acceptance[], open_questions[])
-DigitalHuman(id, name, role, title, mission, skills[], responsibilities[], boundaries[], voice, memory[])
+DigitalHuman(id, name, role, title, mission, skills[], responsibilities[], boundaries[], voice,
+             avatar, greeting, memory[], onboarded, training_file, exam_score)
 Team(name, lead, members[DigitalHuman])
-Task(id, title, role, description, deliverable, depends_on[], assignee, status, artifact, rounds, review{})
+Position(key, title, headcount, duties[], requirements[], exam_focus[], reason)      # v0.3
+TrainingPlan(human_id, material, questions[])                                        # v0.3
+ExamResult(human_id, score, passed, issues[], attempts)                              # v0.3
+Task(id, title, role, description, deliverable, depends_on[], assignee, status, artifact, rounds,
+     review{}, pm_review{})                                                          # v0.3 增 pm_review
 ReviewResult(verdict, issues[], summary)
-Run(id, goal, dir, brief, team, tasks[], status)
+RetroItem(kind, title, detail, cause, action, owner)                                 # v0.3
+KnowledgeNote(id, title, body, tags[], run_id, created)                              # v0.3
+Run(id, goal, dir, brief, team, tasks[], status, positions[], exams[])               # v0.3
+```
+
+`kind` 取值：`issue`（过程问题）、`capability`（角色能力提升）、`process`（流程优化）。
+
+状态机补充（v0.3）：
+
+```
+DigitalHuman.onboarded: False → (培训+考试≥80) → True
+                             └ (补考仍<80) → False，任务改派同岗位/lead，无替补则 blocked
 ```
 
 任务状态机：
@@ -121,22 +149,40 @@ sequenceDiagram
     U-->>E: 回答
     E->>R: brief(goal, answers)
     R-->>E: ProjectBrief
-    E->>R: roster(brief)
-    R-->>E: Team
+    E->>R: recruit(brief, limit)
+    R-->>E: positions[] + Team（含项目经理）
+    E->>O: start(...) 落盘 positions.md / team.md
+    loop 每个成员（上岗闸门）
+        O->>R: train(human, brief)
+        R-->>O: 培训材料 + 3 道考题（含采分点）
+        O->>R: answer_exam(human, questions)
+        R-->>O: 作答
+        O->>R: grade_exam(pm, human, questions, answers)
+        R-->>O: ExamResult（score/passed/issues）
+        opt <80 分
+            O->>R: 补考（重训 + 重考）
+        end
+    end
+    O->>S: 写 onboarding/ + exam-results.md
     E->>R: plan(brief, team)
     R-->>E: Task[]
     E->>O: new_run(...) 落盘
-    loop 就绪任务
+    loop 就绪任务（仅已上岗成员）
         O->>R: act(human, brief, task, upstream, feedback?)
         R-->>O: markdown 产物
         O->>S: 写产物 + 消息
         O->>R: review(reviewer, task, artifact)
         R-->>O: ReviewResult
-        opt verdict=changes
-            O->>R: act(..., feedback=issues)
+        O->>R: pm_review(pm, task, artifact, brief)
+        R-->>O: ReviewResult（可交付性 + 风险）
+        opt 任一方 changes 且 rounds < max_rework
+            O->>R: act(..., feedback=合并 issues)
         end
         O->>S: 更新状态
     end
+    O->>R: retrospect(pm, brief, team, tasks, exams)
+    R-->>O: 问题 / 能力提升 / 流程优化 / 知识条目
+    O->>S: retrospective.md + kb.json 增量写入
     O->>R: integrate(brief, team, tasks)
     R-->>O: final_report.md
 ```
@@ -194,6 +240,64 @@ sequenceDiagram
 - `changes` 时把 issues 原样回灌给产出数字人，提示词中标注「本轮为第 N 次返工，必须逐条回应」。
 - 轮次上限 `max_rework`（默认 1）：到上限仍 changes 时，任务标记 `done` 但在 `review` 中保留未通过结论，由汇总阶段显式列出未闭环项。
 
+### 6.1 双评审（v0.3）
+
+| 评审方 | 立场 | 判定依据 | 记录位置 |
+| --- | --- | --- | --- |
+| 评审专家（reviewer） | 独立第三方，和产出者不共享立场 | 基线的验收标准 + 任务交付物要求 | `task.review` |
+| 项目经理（project_manager） | 对交付负责，看可交付性与过程风险 | 是否可直接交付、是否留坑、是否与其它产物冲突 | `task.pm_review` |
+
+- 组合规则：`passed = review.passed and pm_review.passed`；任一方 changes 即返工，`issues = review.issues + pm_review.issues`（去重，最多取 6 条回灌）。
+- 成本控制：PM 复核只读产物前 8000 字 + 任务与基线摘要，输出只含 verdict / issues / summary 三个字段。
+- 回落：PM 复核失败（模型异常）时按规则判定（必需章节齐全 → pass），并留 `warn` 事件，不阻塞任务。
+
+### 6.2 项目经理招募与上岗闸门（v0.3）
+
+**为什么必须有 PM**：没有统一招募人时，「谁该进团队」由系统猜；有 PM 后，用人和考核的责任被显式落到一个角色上，且任务只能派给考过的人。
+
+**招募**：
+
+```
+brief → PM.positions(brief) → [Position(key,title,headcount,duties,requirements,exam_focus,reason)]
+      → 系统按岗位实例化 DigitalHuman（复用 personas 模板与形象）
+      → 保证 reviewer 存在；总量 ≤ MAX_MEMBERS；PM 自身不计入上限
+```
+
+岗位 key 必须取自 `personas.ROLES`，保证人设、形象、产物章节稳定；`headcount>1` 时用 `unique_id` 生成 `-2` 后缀并追加分工说明。
+
+**上岗闸门**（`Orchestrator.onboard()`）：
+
+| 步骤 | 调用 | 产物 |
+| --- | --- | --- |
+| 培训 | `train(human, brief)` → 培训材料（岗位职责/项目背景/交付标准/协作流程/常见错误/自检清单）+ 3 道考题 | `onboarding/<human_id>.md` |
+| 作答 | `answer_exam(human, questions)` → 逐题作答 | 内存 |
+| 判卷 | `grade_exam(pm, human, questions, answers)` → score / passed / issues | `exam-results.md` |
+| 补考 | 未达 80 分：重训（追加 issues 作为重点）+ 重考一次 | `attempts=2` |
+| 闸门 | 仍未通过：`onboarded=False`，其任务改派同岗位第二人或 lead；无替补 → 任务 `blocked` | 事件 `onboard_failed` |
+
+判分口径：3 题各 34/33/33 分，四舍五入到整数；`passed = score >= 80`。PM 判卷时必须按采分点逐条给分，缺采分点即扣分，不允许「全给满分」。
+
+**PM 不参与业务任务**：`_assign_roles` 跳过 PM；若计划里出现 `project_manager` 角色，改派给 lead 之外的同岗位或直接报错回落。
+
+### 6.3 复盘与知识库（v0.3）
+
+运行结束（含 partial）由 PM 复盘，三类条目：
+
+| kind | 内容 | 证据要求 |
+| --- | --- | --- |
+| `issue` | 过程中真实发生的问题（返工、阻塞、口径冲突、考试未过） | 任务 id / 评审意见 / 返工轮次 |
+| `capability` | 某角色需要补的能力项 | 角色 key + 具体缺口 + 建议训练方式 |
+| `process` | 流程优化项（提示词、任务粒度、依赖顺序、验收口径） | 对应阶段 + 改动建议 |
+
+知识库落点：`.ai_team/knowledge/kb.json`（跨运行累积），单条结构：
+
+```json
+{"id": "kb-20261117-1", "title": "周报口径必须先定工作日定义", "body": "...",
+ "tags": ["口径", "数据"], "run_id": "20261117-...", "created": "2026-11-17 10:12"}
+```
+
+写入策略：按 `title` 去重（同名只更新 `run_id/created`，保留最新正文）；`kb.md` 每次全量重渲染，供人读与后续运行引用。CLI `ai-team kb` 列出条目，`ai-team kb --tag 口径` 过滤。
+
 ## 7. 配置与真实模型接入
 
 ```bash
@@ -228,6 +332,10 @@ export AITEAM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3   # 可选
 | JSON 不可解析 | 追加纠错提示重试 1 次；仍失败 → 回落规则实现 |
 | 团队结构非法 | 回落规则组队，保留告警事件 |
 | 任务图非法 | 回落规则计划 |
+| 岗位/团队非法 | 回落规则招募（关键词选岗），保留告警事件 |
+| 培训或考试失败 | 该成员重训重考一次；仍失败 → 不上岗，任务改派；无替补 → `blocked` |
+| PM 复核失败 | 按规则判定（必需章节齐全即 pass），记 `warn`，不阻塞任务 |
+| 复盘失败 | 使用规则复盘（由任务评审与返工数据推导），知识库仍写入基础条目 |
 | 进程中断 | `run.json` 为快照，可据此续跑（v0.2 提供 `resume`） |
 
 可观测：`run.log` 逐行事件；`state.db.events` 可查询；CLI 每阶段打印 `[i/n]` 进度与任务结论。
@@ -254,8 +362,8 @@ export AITEAM_BASE_URL=https://ark.cn-beijing.volces.com/api/v3   # 可选
 ```
 ai-team/
 ├── ai_team/            # 核心包（零第三方依赖）
-├── assets/avatars/     # 8 个角色的形象资源
-├── tests/              # unittest，覆盖图校验、离线全流程、对话与记忆、CLI
+├── assets/avatars/     # 9 个角色的形象资源（含项目经理）
+├── tests/              # unittest，覆盖图校验、离线全流程、上岗考核、复盘、对话与记忆、CLI
 ├── docs/               # PRD、技术方案
 ├── examples/           # 示例目标
 ├── scripts/            # 推送/演示脚本
@@ -265,7 +373,8 @@ ai-team/
 
 ## 12. 测试策略
 
-- **单元**：`extract_json` 边界（代码块、前后解释、截断）、`TaskGraph` 环检测/就绪集、角色模板完整性、记忆召回打分与容量淘汰。
-- **集成**：`mock` 提供方端到端跑一次，断言产物数量、最终报告包含目标与验收项、评审轮次受限；对话多轮不漂移、跨运行记忆可复述。
-- **CLI**：`run`/`status`/`export`/`talk`/`memory` 返回码与关键输出。
+- **单元**：`extract_json` 边界（代码块、前后解释、截断）、`TaskGraph` 环检测/就绪集、角色模板完整性、记忆召回打分与容量淘汰、岗位清单解析与及格线判定、知识库去重与标签过滤。
+- **集成**：`mock` 提供方端到端跑一次，断言产物数量、最终报告包含目标与验收项、评审轮次受限；全体成员均上岗、`exam-results.md` 每人有分数；`retrospective.md` 三类条目齐全且知识库条数递增；对话多轮不漂移、跨运行记忆可复述。
+- **闸门**：构造分数 <80 的判卷结果，断言该成员 `onboarded=False`、任务改派、事件日志有 `onboard_failed`。
+- **CLI**：`run`/`status`/`export`/`talk`/`memory`/`kb` 返回码与关键输出。
 - 全部测试无网络依赖，可直接进 CI。

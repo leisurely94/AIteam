@@ -10,10 +10,24 @@ from __future__ import annotations
 
 import datetime as _dt
 import re
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
-from .models import DigitalHuman, ProjectBrief, ReviewResult, Task, Team
-from .personas import ROLES, create_human, sections_for, unique_id
+from .models import (
+    DigitalHuman,
+    ExamResult,
+    PASS_SCORE,
+    Position,
+    ProjectBrief,
+    QUESTION_SCORES,
+    RetroItem,
+    Retrospective,
+    ReviewResult,
+    Task,
+    Team,
+    TrainingPlan,
+)
+from .onboarding import build_team
+from .personas import RECRUITER_ROLE, ROLES, create_human, sections_for, unique_id
 
 # 关键词 → 需要的实现型角色
 ROLE_KEYWORDS = (
@@ -67,8 +81,65 @@ def _pick_roles(goal: str) -> List[str]:
         roles.append("qa_engineer")
     roles.append("reviewer")
     # 去重且按固定顺序
-    order = ["product_manager", "architect", "backend_dev", "frontend_dev", "data_analyst", "qa_engineer", "tech_writer", "reviewer"]
+    order = [RECRUITER_ROLE, "product_manager", "architect", "backend_dev", "frontend_dev",
+             "data_analyst", "qa_engineer", "tech_writer", "reviewer"]
     return [r for r in order if r in roles]
+
+
+def _pick_positions(goal: str, limit: int) -> List[Position]:
+    """规则版岗位清单：按目标关键词选岗，评审岗固定保留，项目经理不进入岗位清单。"""
+    roles = [r for r in _pick_roles(goal) if r not in (RECRUITER_ROLE, "reviewer")]
+    budget = max(1, limit - 1)          # 预留项目经理
+    roles = roles[: max(1, budget - 1)]  # 再预留评审岗
+    roles.append("reviewer")
+    reasons = {
+        "product_manager": "把目标收成可验收的基线，避免各角色各写一套",
+        "architect": "先定结构与接口，减少实现角色之间的返工",
+        "backend_dev": "目标涉及接口、数据或定时逻辑，需要有实现负责人",
+        "frontend_dev": "目标涉及页面或交互，需要有界面负责人",
+        "data_analyst": "目标涉及指标、统计或报表，需要统一口径",
+        "qa_engineer": "需要用用例证明交付达标，异常与边界必须有人覆盖",
+        "tech_writer": "目标需要可照做的使用说明与维护文档",
+        "reviewer": "独立第三方评审，避免产出者自评自过",
+    }
+    positions: List[Position] = []
+    for role in roles:
+        tpl = ROLES[role]
+        positions.append(
+            Position(
+                key=role,
+                title=tpl.title,
+                duties=list(tpl.responsibilities),
+                requirements=list(tpl.skills),
+                exam_focus=list(tpl.sections[:3]),
+                reason=reasons.get(role, tpl.mission),
+                headcount=1,
+            )
+        )
+    return positions
+
+
+_POINT_KEYWORDS: Dict[str, Tuple[str, ...]] = {
+    "说清本岗位交付物": ("负责",),
+    "明确边界与转交对象": ("转交", "边界"),
+    "引用验收标准": ("验收标准",),
+    "说明自检方式": ("自检",),
+    "逐条回应": ("逐条回应",),
+    "新增修改章节": ("修改",),
+    "说明返工后的自检": ("自检",),
+}
+
+
+def _point_hit(point: str, answer: str) -> bool:
+    """采分点命中判定：命中关键词，或采分点的主要词元出现在作答里。"""
+    text = answer or ""
+    for keyword in _POINT_KEYWORDS.get(point, ()):
+        if keyword in text:
+            return True
+    tokens = [t for t in re.findall(r"[\u4e00-\u9fff]{2,}", point) if len(t) >= 2]
+    if any(token in text for token in tokens):
+        return True
+    return len(text) >= 60 and point in text
 
 
 def _new_session(history: Optional[Sequence[Dict[str, str]]], gap_minutes: int = 30) -> bool:
@@ -196,7 +267,7 @@ class OfflineReasoner:
     def plan(self, brief: ProjectBrief, team: Team, limit: int = 8) -> List[Task]:
         roles = []
         for member in team.members:
-            if member.role == "reviewer":
+            if member.role in ("reviewer", RECRUITER_ROLE):
                 continue
             if member.role not in roles:
                 roles.append(member.role)
@@ -253,6 +324,237 @@ class OfflineReasoner:
         return (
             "围绕目标「%s」，%s。交付要求：结构完整、结论明确，能被独立评审对照验收标准。"
             % (_first_sentences(brief.goal, 50), mission)
+        )
+
+    # ---------- 招募与上岗（v0.3） ----------
+
+    def recruit(self, brief: ProjectBrief, limit: int = 6) -> Tuple[List[Position], Team]:
+        positions = _pick_positions(brief.goal, limit)
+        return positions, build_team(brief, positions, limit)
+
+    def roster(self, brief: ProjectBrief, limit: int = 6) -> Team:
+        return self.recruit(brief, limit)[1]
+
+    def train(self, human: DigitalHuman, brief: ProjectBrief, focus_note: str = "") -> TrainingPlan:
+        tpl = ROLES.get(human.role)
+        sections = sections_for(human.role)
+        duties = "、".join(human.responsibilities) or (tpl.mission if tpl else "完成岗位职责")
+        material = (
+            "### 1. 岗位职责\n\n%s\n\n"
+            "### 2. 项目背景与约束\n\n目标：%s\n\n约束：%s\n\n"
+            "### 3. 交付标准\n\n你产出的文档必须包含这些章节：%s。\n"
+            "验收时按基线标准逐条对照：%s。\n\n"
+            "### 4. 协作流程\n\n上游产物是判断依据，必须引用其关键结论；产出后交独立评审，"
+            "评审意见必须逐条回应，并在文档中新增「按评审意见的修改」章节；"
+            "项目经理复核可交付性与过程风险，两方都通过才算完成。\n\n"
+            "### 5. 常见错误\n\n%s\n\n"
+            "### 6. 自检清单\n\n- 是否写清结论而不是罗列过程\n- 是否标注了假设与不确定项\n"
+            "- 是否与上游口径一致\n- 是否每条验收标准都能在本岗位产物里找到对应证据\n"
+            % (
+                duties,
+                brief.goal,
+                "；".join(brief.constraints) or "无特别约束",
+                "、".join(sections),
+                "；".join(brief.acceptance) or "按基线验收标准",
+                "\n".join("- 不写「需要进一步讨论」这类空话；边界不清时先写假设再给结论"),
+            )
+        )
+        if focus_note:
+            material += "\n### 7. 本次重点补强\n\n%s\n" % focus_note
+
+        questions = [
+            {
+                "q": "你在本项目里负责哪些产出、哪些不属于你的职责？",
+                "points": ["说清本岗位交付物", "明确边界与转交对象"],
+            },
+            {
+                "q": "你的产物按什么标准算通过？请对照本项目验收标准说明。",
+                "points": ["引用验收标准", "说明自检方式"],
+            },
+            {
+                "q": "收到评审意见后你怎么处理？返工要交付什么？",
+                "points": ["逐条回应", "新增修改章节", "说明返工后的自检"],
+            },
+        ]
+        return TrainingPlan(human_id=human.id, material=material, questions=questions)
+
+    def answer_exam(self, human: DigitalHuman, plan: TrainingPlan, brief: ProjectBrief, focus_note: str = "") -> List[str]:
+        sections = "、".join(sections_for(human.role))
+        answers = [
+            "我负责%s。超出这个范围的需求我会转交给对应角色，不擅自扩范围。"
+            % ("、".join(human.responsibilities[:3]) or human.mission),
+            "我的产物按基线验收标准逐条对照，并按自检清单检查结构完整性；交付时必须包含 %s 这些章节，"
+            "结论前置、证据可查；不满足就不提交评审。" % sections,
+            "收到评审意见后逐条回应，在文档中新增「按评审意见的修改」章节，说明每条怎么改、改在哪一节，"
+            "改完按自检清单重新过一遍再提交。",
+        ]
+        if focus_note:
+            answers[-1] += "上次暴露的问题是：%s，这次已在流程里补了对应检查项。" % focus_note
+        return answers
+
+    def grade_exam(
+        self,
+        pm: DigitalHuman,
+        human: DigitalHuman,
+        plan: TrainingPlan,
+        answers: List[str],
+        brief: ProjectBrief,
+    ) -> ExamResult:
+        """规则判卷：按采分点关键词命中计分，宁可严不可放水。"""
+        issues: List[str] = []
+        score = 0
+        for index, question in enumerate(plan.questions):
+            answer = answers[index] if index < len(answers) else ""
+            points = question.get("points") or []
+            weight = QUESTION_SCORES[index] if index < len(QUESTION_SCORES) else 0
+            if not points:
+                score += weight
+                continue
+            hits = sum(1 for point in points if _point_hit(point, answer))
+            ratio = hits / float(len(points))
+            score += int(round(weight * ratio))
+            if ratio < 1.0:
+                missing = [p for p in points if not _point_hit(p, answer)]
+                issues.append("第 %d 题缺采分点：%s" % (index + 1, "、".join(missing[:2])))
+        if len(answers) < len(plan.questions):
+            issues.append("作答数量不足（%d/%d）" % (len(answers), len(plan.questions)))
+        score = min(100, score)
+        return ExamResult(
+            human_id=human.id, score=score, passed=score >= PASS_SCORE,
+            issues=issues, answers=answers,
+        )
+
+    def pm_review(self, pm: DigitalHuman, task: Task, artifact: str, brief: ProjectBrief) -> ReviewResult:
+        issues: List[str] = []
+        if len(artifact) < 600:
+            issues.append("篇幅不足以支撑下游直接使用，请补到可执行粒度")
+        if "## 上游输入摘要" not in artifact and task.depends_on:
+            issues.append("有上游任务但未说明上游结论如何被采用，请补上游依据")
+        if "假设" not in artifact and "风险" not in artifact:
+            issues.append("未标注假设或风险，过程风险不可见，请补「风险与待确认」")
+        if issues:
+            return ReviewResult(verdict="changes", issues=issues, summary="不可直接交付：%s" % "；".join(issues[:2]))
+        return ReviewResult(verdict="pass", issues=[], summary="可交付：结构与风险均已交代。")
+
+    def retrospect(
+        self,
+        pm: DigitalHuman,
+        brief: ProjectBrief,
+        team: Team,
+        tasks: Sequence[Task],
+        exams: Sequence[ExamResult],
+        position_lines: str = "",
+    ) -> Retrospective:
+        issues: List[RetroItem] = []
+        capabilities: List[RetroItem] = []
+        processes: List[RetroItem] = []
+        knowledge: List[Dict[str, object]] = []
+        name_of = {m.id: m.name for m in team.members}
+
+        for task in tasks:
+            review = task.review or {}
+            if task.rounds > 0:
+                issues.append(
+                    RetroItem(
+                        kind="issue",
+                        title="%s 被评审打回 %d 轮" % (task.title, task.rounds),
+                        detail="评审意见：%s" % ("；".join((review.get("issues") or [])[:2]) or "未记录"),
+                        cause="产出未先对照验收标准自检",
+                        action="产出前先按验收标准逐条自检，再提交评审",
+                        owner=name_of.get(task.assignee, task.assignee),
+                    )
+                )
+                capabilities.append(
+                    RetroItem(
+                        kind="capability",
+                        title="%s 的验收自检能力" % (name_of.get(task.assignee, task.role)),
+                        detail="本轮在「%s」上出现返工" % task.title,
+                        action="在培训材料里固定「提交前自检清单」，并要求产出文档含自检结论",
+                        owner=task.assignee,
+                    )
+                )
+            if task.status in ("blocked", "failed"):
+                issues.append(
+                    RetroItem(
+                        kind="issue",
+                        title="%s 未闭环（%s）" % (task.title, task.status),
+                        detail=str((task.review or {}).get("summary") or ""),
+                        cause="上游未完成或执行失败",
+                        action="在计划阶段补齐依赖冗余，或提前拆分阻塞任务",
+                        owner=name_of.get(task.assignee, task.assignee),
+                    )
+                )
+
+        for exam in exams:
+            if not exam.passed:
+                issues.append(
+                    RetroItem(
+                        kind="issue",
+                        title="%s 未通过上岗考核（%d 分）" % (name_of.get(exam.human_id, exam.human_id), exam.score),
+                        detail="；".join(exam.issues[:2]) or "采分点未覆盖",
+                        cause="培训材料未覆盖考核重点",
+                        action="把考核重点写进培训材料第 3 节交付标准",
+                        owner=name_of.get(exam.human_id, exam.human_id),
+                    )
+                )
+
+        if any(task.rounds > 0 for task in tasks):
+            processes.append(
+                RetroItem(
+                    kind="process",
+                    title="评审前增加自检环节",
+                    detail="多数返工源于产出未先自检",
+                    action="在 act 提示词里要求产出末尾附「自检结论」，评审首轮通过率应上升",
+                    owner="project_manager",
+                )
+            )
+        if len(exams) and any(e.score < 90 for e in exams):
+            processes.append(
+                RetroItem(
+                    kind="process",
+                    title="上岗考核按项目定制采分点",
+                    detail="通用考题无法验证本项目的具体口径",
+                    action="考题必须引用本项目验收标准，采分点写到可判定",
+                    owner="project_manager",
+                )
+            )
+
+        knowledge.append(
+            {
+                "title": "交付前自检优先于评审",
+                "body": "让产出者在提交评审前按验收标准逐条自检，并在文档末尾写明自检结论，"
+                        "可显著减少返工轮次。适用于所有以文档为产物的项目。",
+                "tags": ["流程", "评审"],
+            }
+        )
+        for item in brief.constraints[:2]:
+            knowledge.append(
+                {
+                    "title": "本项目约束：%s" % _first_sentences(item, 18),
+                    "body": "约束「%s」来自目标「%s」，同类项目需在基线阶段就写入验收口径。"
+                            % (item, _first_sentences(brief.goal, 40)),
+                    "tags": ["约束", "基线"],
+                }
+            )
+        if not issues:
+            issues.append(
+                RetroItem(
+                    kind="issue",
+                    title="无重大过程问题",
+                    detail="全部任务一次通过评审，未出现返工或阻塞",
+                    cause="基线口径清晰、岗位分工明确",
+                    action="保持当前的基线与考核做法",
+                    owner=pm.name,
+                )
+            )
+
+        return Retrospective(
+            summary="本轮 %d 个任务、%d 名成员，返工 %d 次；沉淀 %d 条知识。"
+                    % (len(tasks), len(team.members), sum(t.rounds for t in tasks), len(knowledge)),
+            issues=issues,
+            capabilities=capabilities,
+            processes=processes,
+            knowledge=knowledge,
         )
 
     # ---------- 执行 ----------

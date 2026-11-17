@@ -41,9 +41,13 @@ def export_bundle(data_dir: str, run_id: str = "latest", out_dir: str = "dist") 
         "",
         report.rstrip(),
         "",
-        "# 附录：各角色完整产物",
-        "",
     ]
+    for title, relpath in (("岗位清单", "positions.md"), ("上岗考核", "exam-results.md"), ("项目复盘", "retrospective.md")):
+        body = ws.read_text(relpath)
+        if body:
+            parts += ["# 附录：%s" % title, "", body.rstrip(), "", "---", ""]
+
+    parts += ["# 附录：各角色完整产物", ""]
     for task in run.tasks:
         if not task.artifact:
             continue

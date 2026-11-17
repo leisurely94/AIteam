@@ -6,30 +6,52 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .config import Settings
 from .jsonutil import JSONParseError, extract_json
 from .llm import ChatClient, LLMError
-from .models import DigitalHuman, ProjectBrief, ReviewResult, Task, Team
-from .personas import create_human, sections_for, template, unique_id
+from .models import (
+    DigitalHuman,
+    ExamResult,
+    Position,
+    ProjectBrief,
+    Retrospective,
+    ReviewResult,
+    Task,
+    Team,
+    TrainingPlan,
+)
+from .onboarding import build_team, normalize_positions
+from .personas import RECRUITER_ROLE, sections_for
 from .prompts import (
+    ANSWER_EXAM_SYSTEM,
     BRIEF_SYSTEM,
     CLARIFY_SYSTEM,
+    GRADE_SYSTEM,
     INTEGRATE_SYSTEM,
     PLAN_SYSTEM,
+    PM_REVIEW_SYSTEM,
+    RECRUIT_SYSTEM,
+    RETRO_SYSTEM,
     REVIEW_SYSTEM,
-    ROSTER_SYSTEM,
     act_system,
     act_user,
+    answer_exam_system,
+    answer_exam_user,
     brief_user,
     chat_system,
     chat_user,
     clarify_user,
+    grade_exam_user,
     integrate_user,
     plan_user,
+    pm_review_user,
+    recruit_user,
+    retro_user,
     review_user,
-    roster_user,
+    TRAIN_SYSTEM,
+    train_user,
 )
 from .tasks import PlanError, TaskGraph
 
@@ -48,6 +70,42 @@ class Reasoner:
         raise NotImplementedError
 
     def roster(self, brief: ProjectBrief, limit: int = 6) -> Team:
+        raise NotImplementedError
+
+    def roster(self, brief: ProjectBrief, limit: int = 6) -> Team:
+        return self.recruit(brief, limit)[1]
+
+    def recruit(self, brief: ProjectBrief, limit: int = 6) -> Tuple[List[Position], Team]:
+        raise NotImplementedError
+
+    def train(self, human: DigitalHuman, brief: ProjectBrief, focus_note: str = "") -> TrainingPlan:
+        raise NotImplementedError
+
+    def answer_exam(self, human: DigitalHuman, plan: TrainingPlan, brief: ProjectBrief, focus_note: str = "") -> List[str]:
+        raise NotImplementedError
+
+    def grade_exam(
+        self,
+        pm: DigitalHuman,
+        human: DigitalHuman,
+        plan: TrainingPlan,
+        answers: List[str],
+        brief: ProjectBrief,
+    ) -> ExamResult:
+        raise NotImplementedError
+
+    def pm_review(self, pm: DigitalHuman, task: Task, artifact: str, brief: ProjectBrief) -> ReviewResult:
+        raise NotImplementedError
+
+    def retrospect(
+        self,
+        pm: DigitalHuman,
+        brief: ProjectBrief,
+        team: Team,
+        tasks: Sequence[Task],
+        exams: Sequence[ExamResult],
+        position_lines: str = "",
+    ) -> Retrospective:
         raise NotImplementedError
 
     def plan(self, brief: ProjectBrief, team: Team, limit: int = 8) -> List[Task]:
@@ -125,67 +183,85 @@ class LLMReasoner(Reasoner):
             raise ReasonerError("基线缺少交付物")
         return brief
 
-    def roster(self, brief: ProjectBrief, limit: int = 6) -> Team:
-        system = ROSTER_SYSTEM % {"limit": limit}
+    def recruit(self, brief: ProjectBrief, limit: int = 6) -> Tuple[List[Position], Team]:
+        system = RECRUIT_SYSTEM % {"limit": limit}
         for attempt in range(2):
             try:
-                payload = self._ask_json(system, roster_user(brief, limit))
-                return self._build_team(payload, limit)
+                payload = self._ask_json(system, recruit_user(brief, limit))
+                raw = payload.get("positions") if isinstance(payload, dict) else payload
+                if not isinstance(raw, list) or not raw:
+                    raise ReasonerError("positions 为空")
+                positions = normalize_positions(raw, limit)
+                if not positions:
+                    raise ReasonerError("岗位清单清洗后为空")
+                return positions, build_team(brief, positions, limit)
             except (ReasonerError, KeyError, ValueError) as exc:
                 if attempt == 1:
-                    raise ReasonerError("团队结构不合法：%s" % exc)
-                system += "\n\n注意：上一次输出的结构不合法（%s），请严格按 schema 输出。" % exc
-        raise ReasonerError("团队结构不合法")
+                    raise ReasonerError("岗位清单不合法：%s" % exc)
+                system += "\n\n注意：上一次输出的岗位清单不合法（%s），请严格按 schema 输出。" % exc
+        raise ReasonerError("岗位清单不合法")
 
-    def _build_team(self, payload: Any, limit: int) -> Team:
+    def train(self, human: DigitalHuman, brief: ProjectBrief, focus_note: str = "") -> TrainingPlan:
+        payload = self._ask_json(TRAIN_SYSTEM, train_user(human, brief, focus_note))
         if not isinstance(payload, dict):
-            raise ReasonerError("组队输出不是 JSON 对象")
-        raw_members = payload.get("members")
-        if not isinstance(raw_members, list) or not raw_members:
-            raise ReasonerError("members 为空")
+            raise ReasonerError("培训输出不是 JSON 对象")
+        plan = TrainingPlan.from_dict({"human_id": human.id, "material": payload.get("material"),
+                                       "questions": payload.get("questions")})
+        if not plan.material or len(plan.material) < 200:
+            raise ReasonerError("培训材料过短（%d 字）" % len(plan.material))
+        if len(plan.questions) < 2:
+            raise ReasonerError("考题少于 2 道")
+        return plan
 
-        members: List[DigitalHuman] = []
-        taken: List[str] = []
-        role_counter: Dict[str, int] = {}
-        for item in raw_members[:limit]:
-            if not isinstance(item, dict):
-                continue
-            role = str(item.get("role") or "").strip()
-            if not role:
-                continue
-            template(role)  # 校验角色合法
-            index = role_counter.get(role, 0)
-            human = create_human(
-                role,
-                focus=str(item.get("focus") or "").strip(),
-                index=index,
-                name=str(item.get("name") or "").strip() or None,
-            )
-            human.id = unique_id(human.id, taken)
-            taken.append(human.id)
-            role_counter[role] = index + 1
-            members.append(human)
+    def answer_exam(self, human: DigitalHuman, plan: TrainingPlan, brief: ProjectBrief, focus_note: str = "") -> List[str]:
+        payload = self._ask_json(answer_exam_system(human), answer_exam_user(brief, plan, focus_note))
+        answers = payload.get("answers") if isinstance(payload, dict) else payload
+        if not isinstance(answers, list) or not answers:
+            raise ReasonerError("作答为空")
+        cleaned = [str(a).strip() for a in answers if str(a).strip()]
+        if len(cleaned) < len(plan.questions):
+            raise ReasonerError("作答数量不足（%d/%d）" % (len(cleaned), len(plan.questions)))
+        return cleaned[: len(plan.questions)]
 
-        if not members:
-            raise ReasonerError("没有可用的团队成员")
+    def grade_exam(
+        self,
+        pm: DigitalHuman,
+        human: DigitalHuman,
+        plan: TrainingPlan,
+        answers: List[str],
+        brief: ProjectBrief,
+    ) -> ExamResult:
+        payload = self._ask_json(GRADE_SYSTEM, grade_exam_user(human, brief, plan, answers))
+        if not isinstance(payload, dict) or "score" not in payload:
+            raise ReasonerError("判卷输出缺少 score")
+        return ExamResult.from_dict(
+            {"human_id": human.id, "score": payload.get("score"), "issues": payload.get("issues"),
+             "answers": answers}
+        )
 
-        # 保证必备角色存在
-        for required in ("product_manager", "reviewer"):
-            if not any(m.role == required for m in members):
-                if len(members) >= limit:
-                    members.pop()
-                human = create_human(required, index=0)
-                human.id = unique_id(human.id, taken)
-                taken.append(human.id)
-                members.append(human)
+    def pm_review(self, pm: DigitalHuman, task: Task, artifact: str, brief: ProjectBrief) -> ReviewResult:
+        payload = self._ask_json(PM_REVIEW_SYSTEM, pm_review_user(task, artifact, brief))
+        result = ReviewResult.from_dict(payload)
+        if result.verdict == "changes" and not result.issues:
+            result.issues = ["产出尚不可直接交付，请补齐结论与证据"]
+        return result
 
-        lead_role = str(payload.get("lead") or "").strip()
-        lead = next((m.id for m in members if m.role == lead_role), "")
-        if not lead:
-            lead = next((m.id for m in members if m.role == "product_manager"), members[0].id)
-
-        name = str(payload.get("team_name") or "").strip() or "数字人项目组"
-        return Team(name=name, lead=lead, members=members)
+    def retrospect(
+        self,
+        pm: DigitalHuman,
+        brief: ProjectBrief,
+        team: Team,
+        tasks: Sequence[Task],
+        exams: Sequence[ExamResult],
+        position_lines: str = "",
+    ) -> Retrospective:
+        payload = self._ask_json(RETRO_SYSTEM, retro_user(brief, team, tasks, exams, position_lines))
+        if not isinstance(payload, dict):
+            raise ReasonerError("复盘输出不是 JSON 对象")
+        result = Retrospective.from_dict(payload)
+        if not (result.issues or result.capabilities or result.processes):
+            raise ReasonerError("复盘三类条目全为空")
+        return result
 
     def plan(self, brief: ProjectBrief, team: Team, limit: int = 8) -> List[Task]:
         system = PLAN_SYSTEM % {"limit": limit}
@@ -213,6 +289,8 @@ class LLMReasoner(Reasoner):
             role = str(item.get("role") or "").strip()
             if role not in roles:
                 raise ReasonerError("任务 %s 的角色 %s 不在团队中" % (item.get("id"), role))
+            if role == RECRUITER_ROLE:
+                raise ReasonerError("项目经理不承担业务任务，任务 %s 请改派给业务角色" % item.get("id"))
             task = Task(
                 id=str(item.get("id") or "").strip(),
                 title=str(item.get("title") or "").strip(),
@@ -284,9 +362,13 @@ def dump_structure() -> str:
     return json.dumps(
         {
             "brief": ["goal", "background", "deliverables", "constraints", "acceptance", "open_questions"],
-            "roster": ["team_name", "lead", "members[role,name,focus]"],
+            "recruit": ["positions[key,title,headcount,duties,requirements,exam_focus,reason]"],
+            "train": ["material", "questions[q,points]"],
+            "exam_answer": ["answers[]"],
+            "grade": ["score", "issues[]", "summary"],
             "plan": ["tasks[id,title,role,description,deliverable,depends_on]"],
-            "sections": {r: sections_for(r) for r in ("product_manager", "architect", "qa_engineer")},
+            "retro": ["summary", "issues[]", "capabilities[]", "processes[]", "knowledge[]"],
+            "sections": {r: sections_for(r) for r in ("project_manager", "product_manager", "qa_engineer")},
         },
         ensure_ascii=False,
         indent=2,

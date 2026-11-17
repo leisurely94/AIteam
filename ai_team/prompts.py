@@ -50,6 +50,224 @@ def clarify_user(goal: str) -> str:
     return "用户目标：\n%s\n\n请输出 JSON。" % goal
 
 
+RECRUIT_SYSTEM = """你是本项目的项目经理，也是团队的招募人。给定需求基线与角色目录，
+你要定义本项目需要哪些岗位、各要几个人、为什么需要、考核什么。
+
+只输出 JSON：
+{
+  "positions": [
+    {
+      "key": "角色 key",
+      "title": "岗位名称",
+      "headcount": 1,
+      "duties": ["这个岗位在本项目具体负责什么"],
+      "requirements": ["上岗必须具备的能力"],
+      "exam_focus": ["上岗考试要考的重点"],
+      "reason": "为什么这个项目需要这个岗位（一句话）"
+    }
+  ]
+}
+
+规则：
+1. key 只能取角色目录里出现过的值；不要输出项目经理自己。
+2. 必须包含 reviewer（独立评审）与 product_manager（需求基线口径）。
+3. 岗位总人数（headcount 之和）不超过 %(limit)d - 1（留一个位置给项目经理），同一岗位最多 2 人。
+4. 岗位必须覆盖基线的全部交付物，不要凑人头，也不要漏掉实现类岗位。
+5. exam_focus 要落到本项目能考的具体点（如「异常与边界用例是否覆盖」），不要写「综合素质」。
+6. 不要输出任何解释文字。"""
+
+
+def recruit_user(brief: ProjectBrief, limit: int) -> str:
+    dels = "\n".join("- %s" % d for d in brief.deliverables) or "- 无"
+    return (
+        "需求基线：\n目标：%s\n背景：%s\n交付物：\n%s\n约束：%s\n验收标准：%s\n\n"
+        "角色目录（key | 名称 | 使命）：\n%s\n\n岗位总人数上限：%d\n请输出 JSON。"
+        % (
+            brief.goal,
+            brief.background or "未说明",
+            dels,
+            "；".join(brief.constraints) or "未说明",
+            "；".join(brief.acceptance) or "未说明",
+            catalog_text(),
+            max(1, limit - 1),
+        )
+    )
+
+
+TRAIN_SYSTEM = """你是项目经理，正在给即将上岗的成员做上岗培训，并当场出 3 道考题。
+
+只输出 JSON：
+{
+  "material": "Markdown 培训材料，包含：岗位职责、项目背景与约束、交付标准、协作流程、常见错误、自检清单",
+  "questions": [
+    {"q": "考题（要求结合本项目，不要考通用概念）", "points": ["采分点1", "采分点2"]}
+  ]
+}
+
+规则：
+1. 培训材料必须针对本项目，直接引用基线的目标、交付物、约束与验收标准。
+2. 3 道题分别考：岗位职责边界、本项目交付标准/验收口径、返工与协作流程。
+3. 每题 2-3 个采分点，采分点要可判定（有/没有、写了/没写）。
+4. 不要输出任何解释文字。"""
+
+
+def train_user(human: DigitalHuman, brief: ProjectBrief, focus_note: str = "") -> str:
+    parts = [
+        "候选人：%s（%s，角色 key=%s）" % (human.name, human.title, human.role),
+        "岗位职责：%s" % "；".join(human.responsibilities),
+        "岗位边界：%s" % "；".join(human.boundaries),
+        "能力要求：%s" % "；".join(human.skills),
+        "本项目目标：%s" % brief.goal,
+        "交付物：%s" % "；".join(brief.deliverables),
+        "约束：%s" % "；".join(brief.constraints),
+        "验收标准：%s" % "；".join(brief.acceptance),
+    ]
+    if focus_note:
+        parts.append("上一次考核暴露的问题（本次培训要重点补）：\n%s" % focus_note)
+    parts.append("请输出 JSON。")
+    return "\n\n".join(parts)
+
+
+ANSWER_EXAM_SYSTEM = """你是「%(name)s」，%(title)s，正在参加上岗考试。请按你的岗位职责和本项目要求作答。
+
+只输出 JSON：
+{"answers": ["第1题答案", "第2题答案", "第3题答案"]}
+
+规则：
+1. 每题回答 80-200 字，必须结合本项目，不要背通用理论。
+2. 明确写出你会怎么做、判断标准是什么、出问题怎么处理。
+3. 不要输出任何解释文字。"""
+
+
+def answer_exam_system(human: DigitalHuman) -> str:
+    return ANSWER_EXAM_SYSTEM % {"name": human.name, "title": human.title}
+
+
+def answer_exam_user(brief: ProjectBrief, plan, focus_note: str = "") -> str:
+    lines = ["项目目标：%s" % brief.goal, "验收标准：%s" % "；".join(brief.acceptance), "", "考题："]
+    for index, question in enumerate(plan.questions, 1):
+        lines.append("%d. %s" % (index, question.get("q", "")))
+    if focus_note:
+        lines.append("\n上次考核暴露的问题（这次必须答到）：%s" % focus_note)
+    lines.append("\n请输出 JSON。")
+    return "\n".join(lines)
+
+
+GRADE_SYSTEM = """你是项目经理，正在给候选人判卷。按采分点逐条核对作答，给出分数与结论。
+
+只输出 JSON：
+{"score": 0-100 的整数, "issues": ["缺了哪个采分点、应该补什么"], "summary": "一句话结论"}
+
+评分规则：
+1. 三道题分值 34/33/33，按采分点命中给分；只写口号没写做法的不得分。
+2. 未覆盖项目约束、验收口径或返工流程的，必须扣分并写进 issues。
+3. score >= 80 视为通过；低于 80 时 issues 至少 2 条，说明重训重点。
+4. 不要放水：满分只在三题全部命中全部采分点时才给。
+5. 不要输出任何解释文字。"""
+
+
+def grade_exam_user(human: DigitalHuman, brief: ProjectBrief, plan, answers: list) -> str:
+    parts = [
+        "候选人：%s（%s）" % (human.name, human.title),
+        "本项目验收标准：%s" % "；".join(brief.acceptance),
+        "考题与采分点：",
+    ]
+    for index, question in enumerate(plan.questions, 1):
+        parts.append(
+            "%d. %s\n   采分点：%s" % (index, question.get("q", ""), "；".join(question.get("points") or []))
+        )
+    parts.append("候选人作答：")
+    for index, answer in enumerate(answers, 1):
+        parts.append("%d. %s" % (index, answer))
+    parts.append("请输出 JSON。")
+    return "\n\n".join(parts)
+
+
+PM_REVIEW_SYSTEM = """你是项目经理，正在复核一名成员的产出。评审专家看「是否满足验收标准」，
+你看「能不能直接交付、有没有留下过程风险」。
+
+只输出 JSON：
+{"verdict": "pass 或 changes", "issues": ["具体、可执行的问题"], "summary": "一句话结论"}
+
+复核规则：
+1. 先判断这份产物能不能被下游直接使用：缺章节、缺结论、缺数据来源都算不能交付。
+2. 再看过程风险：是否有未验证的假设、是否与其它角色的口径冲突、是否把风险藏起来没写。
+3. 问题必须指到「哪一节、缺什么、补成什么样」，禁止空话。
+4. 不要替产出者重写内容，也不要重复评审专家已经提过的问题。
+5. 不要输出任何解释文字。"""
+
+
+def pm_review_user(task: Task, artifact: str, brief: ProjectBrief) -> str:
+    return (
+        "任务：%s\n交付物要求：%s\n验收标准：%s\n\n待复核文档（节选）：\n%s\n\n请输出 JSON。"
+        % (
+            task.title,
+            task.deliverable or "Markdown 文档",
+            "；".join(brief.acceptance) or "未说明",
+            artifact[:8000],
+        )
+    )
+
+
+RETRO_SYSTEM = """你是项目经理，项目刚结束，你要做复盘并沉淀知识库。
+
+只输出 JSON：
+{
+  "summary": "一句话结论：这个项目最该被记住的是什么",
+  "issues": [{"title": "问题", "detail": "发生了什么，有什么证据", "cause": "根因", "action": "怎么避免再次发生", "owner": "责任角色 key 或姓名"}],
+  "capabilities": [{"title": "要补的能力", "detail": "哪个角色、差在哪", "action": "怎么补（训练/提示词/检查项）", "owner": "角色 key"}],
+  "processes": [{"title": "流程优化项", "detail": "哪个阶段、现在的做法有什么问题", "action": "改成什么", "owner": "角色 key"}],
+  "knowledge": [{"title": "知识条目标题（15 字内，可复用）", "body": "可被后续项目直接复用的结论或做法", "tags": ["标签"]}]
+}
+
+规则：
+1. 只能基于输入里真实发生的事（返工、考试分数、评审意见、任务状态），不许编。
+2. 每条 issue 必须能指到任务 id 或成员姓名；没有证据的问题不要写。
+3. knowledge 3-5 条，必须能脱离本项目被理解，禁止「本项目要注意质量」这类空话。
+4. 不要输出任何解释文字。"""
+
+
+def retro_user(brief: ProjectBrief, team: Team, tasks: Sequence[Task], exams: Sequence, position_lines: str = "") -> str:
+    task_lines = []
+    for task in tasks:
+        review = (task.review or {})
+        pm_review = (task.pm_review or {})
+        task_lines.append(
+            "- %s | %s | %s | 状态=%s | 返工=%d | 评审=%s | PM复核=%s | 意见=%s"
+            % (
+                task.id,
+                task.title,
+                task.assignee or "未分配",
+                task.status,
+                task.rounds,
+                review.get("verdict", "-"),
+                pm_review.get("verdict", "-"),
+                "；".join((review.get("issues") or [])[:2]) or "无",
+            )
+        )
+    exam_lines = []
+    for exam in exams:
+        exam_lines.append(
+            "- %s | 分数=%d | 结论=%s | 问题=%s"
+            % (exam.human_id, exam.score, "通过" if exam.passed else "未通过",
+               "；".join(exam.issues[:2]) or "无")
+        )
+    member_lines = "\n".join("- %s（%s，%s）" % (m.name, m.title, m.id) for m in team.members)
+    return (
+        "项目目标：%s\n交付物：%s\n验收标准：%s\n\n团队：\n%s\n\n岗位：\n%s\n\n"
+        "培训考核：\n%s\n\n任务与评审：\n%s\n\n请输出 JSON。"
+        % (
+            brief.goal,
+            "；".join(brief.deliverables),
+            "；".join(brief.acceptance),
+            member_lines,
+            position_lines or "- 无",
+            "\n".join(exam_lines) or "- 无",
+            "\n".join(task_lines) or "- 无",
+        )
+    )
+
+
 ROSTER_SYSTEM = """你是数字人团队的组建者。给定需求基线和角色目录，选择完成该项目所需的【最小】角色集合。
 
 只输出 JSON：
